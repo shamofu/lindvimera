@@ -26,15 +26,7 @@ jobs:
           submodules: recursive
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - run: pnpm lint
-      - run: pnpm format:check
-      - run: pnpm typecheck
-      - run: pnpm lint:obsidian
-      - run: pnpm audit:dependencies
-      - name: Test dependency audit gate
-        run: node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs
-      - name: Test release publication
-        run: ./test/release/publish.test.ps1
+      - uses: ./.github/actions/quality
 
   unit:
     runs-on: windows-2025
@@ -102,34 +94,7 @@ jobs:
             .cache/obsidian/1.13.7/*.asar.gz
           key: obsidian-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.ref }}-1.13.7-f233dc24896b3f2d5f9e4b01111181a561d0760b2105f0a474024c5f3143a9bc-69253e39aa0b980e3cf96e9e8a8a4bed6b6481ef7021cd762f67872662d8d25a
       - name: Prepare pinned Obsidian
-        run: |
-          $taskCache = Join-Path $env:GITHUB_WORKSPACE '.cache/obsidian/1.13.7'
-          $taskRuntime = Join-Path $env:GITHUB_WORKSPACE '.test-runtime'
-          New-Item -ItemType Directory -Force -Path $taskCache, $taskRuntime | Out-Null
-          $taskAssets = @{
-            'Obsidian-1.13.7.exe' = 'f233dc24896b3f2d5f9e4b01111181a561d0760b2105f0a474024c5f3143a9bc'
-            'obsidian-1.13.7.asar.gz' = '69253e39aa0b980e3cf96e9e8a8a4bed6b6481ef7021cd762f67872662d8d25a'
-          }
-          foreach ($taskAsset in $taskAssets.GetEnumerator()) {
-            $taskPath = Join-Path $taskCache $taskAsset.Key
-            if (!(Test-Path -LiteralPath $taskPath) -or (Get-FileHash -LiteralPath $taskPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskAsset.Value) {
-              Invoke-WebRequest -Uri "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.13.7/$($taskAsset.Key)" -OutFile $taskPath
-            }
-            if ((Get-FileHash -LiteralPath $taskPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $taskAsset.Value) {
-              throw "Obsidian asset checksum mismatch: $($taskAsset.Key)"
-            }
-          }
-          $taskInstall = Join-Path $taskRuntime 'obsidian-install'
-          $taskInstaller = Start-Process -FilePath (Join-Path $taskCache 'Obsidian-1.13.7.exe') -ArgumentList '/S', "/D=$taskInstall" -WindowStyle Hidden -Wait -PassThru
-          if ($taskInstaller.ExitCode -ne 0) { throw "Obsidian installer failed: $($taskInstaller.ExitCode)" }
-          $taskExecutable = Join-Path $taskInstall 'Obsidian.exe'
-          if (!(Test-Path -LiteralPath $taskExecutable)) { throw 'Obsidian executable is missing.' }
-          $taskArchive = Join-Path $taskRuntime 'obsidian-1.13.7.asar'
-          $taskInput = [IO.Compression.GZipStream]::new([IO.File]::OpenRead((Join-Path $taskCache 'obsidian-1.13.7.asar.gz')), [IO.Compression.CompressionMode]::Decompress)
-          $taskOutput = [IO.File]::Create($taskArchive)
-          try { $taskInput.CopyTo($taskOutput) } finally { $taskInput.Dispose(); $taskOutput.Dispose() }
-          "OBSIDIAN_EXECUTABLE=$taskExecutable" >> $env:GITHUB_ENV
-          "OBSIDIAN_ARCHIVE=$taskArchive" >> $env:GITHUB_ENV
+        run: ./scripts/probe/prepare-obsidian.ps1
       - run: pnpm test:e2e
       - if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -153,10 +118,6 @@ jobs:
     needs: [quality, unit, build, e2e]
     runs-on: windows-2025
     timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
     steps:
       - name: Require every check to pass
         env:
@@ -181,86 +142,8 @@ jobs:
           path: dist/
       - name: Validate release contents
         id: verify
-        shell: bash
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { appendFile, lstat, readFile, readdir } from 'node:fs/promises';
-          import { join } from 'node:path';
-          import { distributionFiles } from './scripts/distribution.mjs';
-          const json = async path => JSON.parse(await readFile(path, 'utf8'));
-          const manifest = await json('manifest.json');
-          const pkg = await json('package.json');
-          const versions = await json('versions.json');
-          const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-          assert(versionPattern.test(manifest.version), 'Version must be x.y.z without v.');
-          assert.equal(pkg.version, manifest.version, 'Package and manifest versions differ.');
-          assert.equal(manifest.id, 'lindvimera');
-          assert.equal(manifest.isDesktopOnly, true);
-          assert.equal(versions[manifest.version], manifest.minAppVersion, 'Update versions.json.');
-          for (const [version, minimum] of Object.entries(versions))
-            assert(versionPattern.test(version) && versionPattern.test(minimum), 'Invalid versions entry.');
-          const actualFiles = [];
-          for (const path of await readdir('dist', { recursive: true })) {
-            const info = await lstat(join('dist', path));
-            assert(!info.isSymbolicLink(), 'Distribution cannot contain symbolic links.');
-            if (info.isFile()) {
-              assert(info.size > 0, `Empty distribution file: ${path}`);
-              actualFiles.push(path.replaceAll('\\', '/'));
-            }
-          }
-          assert.deepEqual(actualFiles.sort(), [...distributionFiles].sort(), 'Distribution inventory differs.');
-          for (const file of ['manifest.json', 'styles.css'])
-            assert.deepEqual(await readFile(`dist/${file}`), await readFile(file), `Stale ${file}`);
-          const bundle = await readFile('dist/main.js', 'utf8');
-          assert(!/^\s*\/\/[#@]\s*sourceMappingURL=/m.test(bundle), 'Development source maps cannot be released.');
-          await appendFile(process.env.GITHUB_OUTPUT, `version=${manifest.version}\n`);
-          NODE
+        run: node scripts/release/validate.mjs
       - name: Package the tested distribution
         env:
           RELEASE_VERSION: ${{ steps.verify.outputs.version }}
-        run: |
-          $taskRelease = Join-Path $env:GITHUB_WORKSPACE '.release'
-          $taskStaging = Join-Path $env:RUNNER_TEMP "lindvimera-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          New-Item -ItemType Directory -Force -Path $taskRelease, $taskStaging | Out-Null
-          Copy-Item -LiteralPath 'dist' -Destination (Join-Path $taskStaging 'lindvimera') -Recurse
-          $taskZip = "lindvimera-$env:RELEASE_VERSION.zip"
-          Compress-Archive -LiteralPath (Join-Path $taskStaging 'lindvimera') -DestinationPath (Join-Path $taskRelease $taskZip)
-          foreach ($taskName in @('main.js', 'manifest.json', 'styles.css')) {
-            Copy-Item -LiteralPath (Join-Path 'dist' $taskName) -Destination (Join-Path $taskRelease $taskName)
-          }
-          $taskHashes = [ordered]@{}
-          $taskSums = foreach ($taskName in @('main.js', 'manifest.json', 'styles.css', $taskZip)) {
-            $taskHash = (Get-FileHash -LiteralPath (Join-Path $taskRelease $taskName) -Algorithm SHA256).Hash.ToLowerInvariant()
-            $taskHashes[$taskName] = $taskHash
-            "$taskHash  $taskName"
-          }
-          $taskSumsPath = Join-Path $taskRelease 'SHA256SUMS'
-          [IO.File]::WriteAllText($taskSumsPath, (($taskSums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
-          $taskHashes['SHA256SUMS'] = (Get-FileHash -LiteralPath $taskSumsPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          @{
-            schemaVersion = 1
-            commit = $env:GITHUB_SHA
-            runId = [string]$env:GITHUB_RUN_ID
-            runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
-            version = $env:RELEASE_VERSION
-            files = $taskHashes
-          } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskRelease 'provenance.json') -Encoding utf8
-      - name: Attest the tested release assets
-        uses: actions/attest@v4
-        with:
-          subject-path: |
-            .release/main.js
-            .release/manifest.json
-            .release/styles.css
-            .release/lindvimera-${{ steps.verify.outputs.version }}.zip
-            .release/SHA256SUMS
-            .release/provenance.json
-      - uses: actions/upload-artifact@v7.0.1
-        with:
-          name: release-${{ github.sha }}
-          path: .release/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 90
-          overwrite: true
+        run: ./scripts/release/package.ps1

@@ -1,0 +1,21 @@
+name: Check source quality
+description: Run static checks, dependency audit, and build/release tooling regression tests.
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: pnpm lint
+    - shell: pwsh
+      run: pnpm format:check
+    - shell: pwsh
+      run: pnpm typecheck
+    - shell: pwsh
+      run: pnpm lint:obsidian
+    - shell: pwsh
+      run: pnpm audit:dependencies
+    - name: Test dependency, probe, and release tooling
+      shell: pwsh
+      run: node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/release/*.test.mjs
+    - name: Test release publication
+      shell: pwsh
+      run: ./test/release/publish.test.ps1

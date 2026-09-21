@@ -126,17 +126,19 @@ Source・Live Preview・セルの入力競合、取消、ホストへの委譲�
 
 ## GitHub Actionsとリリース
 
-mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`quality`は型検査の後に公式Lintを実行し、依存関係検査も行います。`e2e`はbuildのartifactをそのまま使用し、`release-ready`はすべての成功を必須にします。失敗・キャンセル・スキップはリリース可能と扱いません。Node.js 24、pnpm 12.4.2、固定版サブモジュールとlockfileを使用します。
+mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`quality`は共通actionで静的解析、整形確認、型検査、公式Lint、依存関係検査と検証スクリプトのテストを実行します。`e2e`はbuildのcandidate artifactをそのまま使用し、`release-ready`は全ジョブの成功後に配布内容の検証と梱包を確認します。失敗・キャンセル・スキップでは成功にしません。main CIではリリース用artifactの保存やAttestation生成を行いません。
 
-Releaseの公開処理は`scripts/release/publish.ps1`で実行します。`quality`では`test/release/publish.test.ps1`も実行し、GitHub通信とGit操作をモック化してドラフト作成・再開・公開条件を検査します。ローカルでは`pwsh -NoProfile -File test/release/publish.test.ps1`で実行でき、実際のReleaseやタグは変更しません。
+タグのReleaseはWindows 2025の単一ジョブ、タイムアウト90分で実行します。タグのcommitと固定サブモジュールを取得し、Node.js 24、pnpm 12.4.2、lockfileで依存を導入します。main CIと共通のquality全検査、単体テスト、ビルド、E2E、配布検証・梱包、変更履歴生成、Attestation生成・検証、公開を順番に実行します。E2E後に本番ビルドを作り直しません。過去のCI成功履歴や保存済みartifactを取得せず、そのRelease実行で検証した成果物を公開します。
+
+公開処理は`scripts/release/publish.ps1`です。`quality`では`node --test test/release/*.test.mjs`と`pwsh -NoProfile -File test/release/publish.test.ps1`も実行し、配布検証・梱包、Git履歴からの変更点生成、本文だけの更新、下書きの再作成・公開条件を検査します。GitHubへの書き込みはモック化され、テストは実際のReleaseやタグを変更しません。
 
 workflow全体はブランチ単位の共通concurrency groupで直列実行します。`cancel-in-progress: false`と`queue: max`により、実行中を中断せず最大100件を待機させます。GitHubの待機上限を超えた実行はキャンセルされます。リリースはタグ名にかかわらずreleaseブランチの共通groupを使用します。workflowとその子ジョブに同じgroupを重ねません。
 
-pnpm storeのcacheはbuildだけが保存し、他ジョブは復元だけを行います。キーはブランチ、OS・architecture、Node・pnpm版、lockfileとworkspace設定のhashで分けます。IPADICの検証済み辞書ZIPはbuild、Obsidianの固定installer・archiveはe2eだけが保存します。cache miss時は通常のインストール・検証付き取得を行い、cacheがなくても検証できる構成です。`node_modules`、生成ソース、dist、Vault・profile・レポートはcacheしません。
+main CIではpnpm storeのcacheをbuildだけが保存し、他ジョブは復元だけを行います。キーはブランチ、OS・architecture、Node・pnpm版、lockfileとworkspace設定のhashで分けます。IPADICの検証済み辞書ZIPはbuild、Obsidianの固定installer・archiveはe2eだけが保存します。Releaseは既存setupのpnpm cache復元を任意の高速化に使い、IPADICとObsidianを固定版・hash検証付きで取得します。cacheがなくても実行でき、`node_modules`、生成ソース、dist、Vault・profile・レポートはcacheしません。
 
-自動E2Eはworkflow内でSHA-256固定の公式Obsidian 1.13.7を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。`release-ready`はE2Eジョブの成功と配布ファイル・バージョン・source mapの有無を確認してパッケージ化します。
+自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.13.7を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
 
-パッケージ作成後、`release-ready`で`actions/attest@v4`を使い、標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。証明生成の書き込み権限は同ジョブだけに付与し、E2E済みの配布物を再ビルドしません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
+Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。公開と証明生成の書き込み権限はReleaseジョブに付与します。`provenance.json`とローカル検証情報はschema 2で、repository・commit・version・今回のReleaseのrun ID／attemptとファイルhashを記録します。Actions artifact IDは使用しません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
 
 開発中の`release-ready`はバージョンが公開済みでも成功できます。実リリースは次の手順で行います。
 
@@ -145,8 +147,18 @@ pnpm storeのcacheはbuildだけが保存し、他ジョブは復元だけを行
 3. `git fetch origin`後、releaseへ切り替え、`git merge --ff-only <CI成功済みSHA>`、`git push origin release`を実行します。mainがさらに進んでいても、確認済みSHAを指定します。初回は`git switch -c release <CI成功済みSHA>`で作成します。作業ツリーに未コミット変更がある場合は先に保存します。
 4. `git tag -a x.y.z <CI成功済みSHA> -m x.y.z`、`git push origin refs/tags/x.y.z`を実行します。タグには`v`を付けません。
 
-タグworkflowは対象SHAがreleaseの履歴内にあることと、同じSHAの最新main push CI・全5ジョブの成功を確認します。CIの公開artifactをそのまま取得し、run ID・attempt・バージョン・全ファイルのhashを照合します。検証ジョブと公開処理の両方で、全6ファイルのAttestationを`gh attestation verify`によりリポジトリ・CI workflow・main参照・対象コミットへ照合します。証明の欠落・不一致・通信失敗ではdraft作成・アップロード・公開を開始しません。公開直前にもタグを再確認し、draftへ全assetを揃えてからGitHub Releaseを公開します。添付物は標準3ファイル、ZIP、`SHA256SUMS`、検証元を記録した`provenance.json`です。公式レジストリへの申請やnpm公開は行いません。
+タグworkflowは対象SHAがreleaseの履歴内にあること、タグとcheckout・各versionが一致することを確認します。上記手順でmain CIの成功を確認することは開発時の運用ですが、Releaseの実行条件として過去のCI履歴を参照しません。公開スクリプトは全6ファイルの構成・hash・出所を確認し、Attestationをリポジトリ・Release workflow・対象タグref・commitへ照合します。証明の欠落・不一致・通信失敗では下書き削除・作成・アップロード・公開を開始しません。添付物をアップロードしてremote hashを照合し、タグと下書き状態を再確認して公開します。公式レジストリへの申請やnpm公開は行いません。
 
-artifactとE2E診断ファイルは90日間保持します。公開artifactの欠落・失効・CI失敗・provenance不一致の場合は公開しません。復旧時は同じコミットのmain CIで **Re-run all jobs** を実行し、全成功後にrelease workflowも全ジョブ再実行して新しいCIの出所を検証します。main CIの失敗ジョブだけの再実行ではattemptが揃わないため公開判定は通りません。公開前の通信障害で同じ検証済みartifactを使用する場合は、release workflowの失敗ジョブだけを再実行でき、同一内容のdraftを再開します。ジョブ間の検証済みartifactは7日間保持するため、失効後はrelease workflowの全ジョブを再実行します。公開済みReleaseと内容・出所が一致すれば何も変更せず成功し、違う場合は上書きしません。既に公開したバージョンの差し替えは新しいバージョンで行います。
+main CIのcandidate・E2E診断は90日保持します。ReleaseでもE2E開始後の診断を出力専用artifactとして90日保存しますが、診断保存の失敗を公開条件にしません。公開にActions artifactの受け渡しはなく、保存期限は復旧条件に影響しません。
+
+公開前に失敗した場合はReleaseジョブを再実行します。毎回ソースから再ビルド・全検査し、成功後に同じrepository・タグ・commitのschema 2管理マーカーを持つ下書きだけを削除して作り直します。run ID／attemptやhashが前回と異なっていても、この条件を満たす未公開の下書きは再作成できます。削除直前に下書き状態を再取得し、タグは削除しません。マーカーの欠落・重複・不正形式・旧schema、別commitの場合は変更せず停止します。処理中の下書きを手動編集・公開しないでください。公開済みReleaseは通常の公開処理では変更せず停止し、配布物の差し替えには新しいversionを使用します。
+
+### Release本文と過去分の更新
+
+本文は`scripts/release/notes.mjs`がGit履歴から自動生成します。「変更点」の下へコミット件名とcommitリンクを古い順で並べ、件名は原文のままMarkdownとしてエスケープします。保守・バージョン更新・merge commitも含みます。比較元は、対象commitの祖先にある、対象より小さい最大versionの公開済み正式Releaseです。比較元から対象タグまでを列挙し、比較リンクを添えます。初回は履歴の先頭から対象タグまでを掲載し、比較リンクは付けません。空差分は「前回からコミットの変更はありません」とし、必要なタグや履歴を取得できなければ生成を失敗させます。
+
+Releaseタイトルでversionを示すため、本文に`Lindvimera <version>`や`Verified main CI`などの検証リンクは掲載しません。変更点は専用HTMLコメントで囲み、末尾に出所の管理マーカーを非表示で保持します。検証情報は添付された`provenance.json`から参照できます。
+
+既存Releaseは`scripts/release/backfill-notes.mjs`で本文だけを更新します。まずプレビューし、`--apply`で適用します。既存の変更点領域は置換し、製品名・versionの重複行と旧`Verified main CI`行だけを除去します。その他の文章と旧schemaを含む出所マーカーは保持します。Releaseタイトル、添付ファイル、タグ、公開状態を変更せず、適用前後に添付ファイルのID・hash等を確認します。`0.1.0`は初回1commit、`0.2.0`は`0.1.0..0.2.0`の3commitが対象です。新しいworkflowはその変更を含むタグから有効になり、過去の本文更新には再ビルドやタグ変更を必要としません。
 
 将来Obsidianの公式ディレクトリへ登録するときは、公開済みmanifestを参照させるためGitHubのデフォルトブランチをreleaseに設定します。開発先はmainのままです。ブランチ・タグの強制更新を禁止するリポジトリルールも設定してください。
