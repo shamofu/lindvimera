@@ -85,12 +85,12 @@ export function displayToSource(map: CellSourceMap, offset: number): number {
   if (!Number.isInteger(offset) || offset < 0 || offset >= map.boundaries.length) {
     throw new TableSourceError("Cell position is outside its editable text.");
   }
-  return map.boundaries[offset]!;
+  return map.boundaries[offset];
 }
 
 export function sourceToDisplay(map: CellSourceMap, offset: number, bias: -1 | 1 = 1): number {
-  const start = map.boundaries[0]!;
-  const end = map.boundaries[map.boundaries.length - 1]!;
+  const start = map.boundaries[0];
+  const end = map.boundaries[map.boundaries.length - 1];
   if (!Number.isInteger(offset) || offset < start || offset > end) {
     throw new TableSourceError("Source position is outside its cell.");
   }
@@ -98,7 +98,7 @@ export function sourceToDisplay(map: CellSourceMap, offset: number, bias: -1 | 1
   let high = map.boundaries.length - 1;
   while (low <= high) {
     const middle = (low + high) >>> 1;
-    const value = map.boundaries[middle]!;
+    const value = map.boundaries[middle];
     if (value === offset) return middle;
     if (value < offset) low = middle + 1;
     else high = middle - 1;
@@ -116,12 +116,12 @@ function splitRow(line: string, offset: number, row: number): TableCell[] {
   }
   if (delimiters.length === 0) throw new TableSourceError("Table row has no cell separator.");
   const leading = /^[ \t]*$/.test(line.slice(0, delimiters[0]));
-  const trailing = /^[ \t]*$/.test(line.slice(delimiters[delimiters.length - 1]! + 1));
+  const trailing = /^[ \t]*$/.test(line.slice(delimiters[delimiters.length - 1] + 1));
   const edges = [-1, ...delimiters, line.length];
   const cells: TableCell[] = [];
   for (let index = leading ? 1 : 0; index < edges.length - (trailing ? 2 : 1); index++) {
-    const from = edges[index]! + 1;
-    const to = edges[index + 1]!;
+    const from = edges[index] + 1;
+    const to = edges[index + 1];
     const raw = line.slice(from, to);
     const leftPadding = raw.match(/^[ \t]*/)?.[0].length ?? 0;
     const trimmed = raw.trim();
@@ -164,24 +164,24 @@ export function parseMarkdownTable(source: string, sourceOffset = 0): MarkdownTa
         : 1);
     return cells;
   });
-  const columns = parsed[0]!.length;
+  const columns = parsed[0].length;
   if (columns === 0 || parsed.some((row) => row.length !== columns)) {
     throw new TableSourceError("A table must have explicit, equal-width rows.");
   }
-  const alignments = parsed[1]!.map((cell) => {
+  const alignments = parsed[1].map((cell) => {
     const token = cell.map.source;
     if (!/^:?-+:?$/.test(token)) throw new TableSourceError("Invalid table separator.");
     if (token.startsWith(":")) return token.endsWith(":") ? "center" : "left";
     return token.endsWith(":") ? "right" : null;
   });
   const separatorStart =
-    sourceOffset + lines[0]!.length + (source[lines[0]!.length] === "\r" ? 2 : 1);
+    sourceOffset + lines[0].length + (source[lines[0].length] === "\r" ? 2 : 1);
   return {
     source,
     from: sourceOffset,
     to: sourceOffset + source.length,
-    rows: [parsed[0]!, ...parsed.slice(2)],
-    separator: { from: separatorStart, to: separatorStart + lines[1]!.length },
+    rows: [parsed[0], ...parsed.slice(2)],
+    separator: { from: separatorStart, to: separatorStart + lines[1].length },
     alignments,
   };
 }

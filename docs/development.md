@@ -12,17 +12,20 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-| コマンド                          | 内容                                                     |
-| --------------------------------- | -------------------------------------------------------- |
-| `pnpm prepare:vendor`             | 固定した上流ソースを再生成し、patchを順に適用            |
-| `pnpm build`                      | 上流ソースを再生成し、配布物を`dist/`へ出力              |
-| `pnpm dev`                        | 起動時に上流ソースを再生成し、監視ビルドを開始           |
-| `pnpm lint` / `pnpm format:check` | 静的解析／整形確認                                       |
-| `pnpm typecheck`                  | 上流の型宣言を生成し、本体とテストを型検査               |
-| `pnpm test:unit`                  | 上流ソースを再生成し、Vitestを実行                       |
-| `pnpm check`                      | 静的解析、整形確認、型検査、単体テスト、ビルドを順に実行 |
-| `pnpm probe`                      | 手動検証用の独立Vaultを準備して起動                      |
-| `pnpm test:e2e`                   | Obsidianを新規起動し、既存suite・OS入力を自動検証        |
+| コマンド                          | 内容                                                   |
+| --------------------------------- | ------------------------------------------------------ |
+| `pnpm prepare:vendor`             | 固定した上流ソースを再生成し、patchを順に適用          |
+| `pnpm build`                      | 上流ソースを再生成し、配布物を`dist/`へ出力            |
+| `pnpm build:probe`                | 配布対象外の検証用プラグインを別ビルド                 |
+| `pnpm dev`                        | 起動時に上流ソースを再生成し、監視ビルドを開始         |
+| `pnpm lint` / `pnpm format:check` | 静的解析／整形確認                                     |
+| `pnpm typecheck`                  | 上流の型宣言を生成し、本体とテストを型検査             |
+| `pnpm lint:obsidian`              | 型検査後に本体・manifest・package情報を公式Lintで検査  |
+| `pnpm audit:dependencies`         | 開発用を含むnpm依存を検査し、High・Criticalで失敗      |
+| `pnpm test:unit`                  | 上流ソースを再生成し、Vitestを実行                     |
+| `pnpm check`                      | Oxlint、整形確認、型検査、公式Lint、単体テスト、ビルド |
+| `pnpm probe`                      | 手動検証用の独立Vaultを準備して起動                    |
+| `pnpm test:e2e`                   | Obsidianを新規起動し、既存suite・OS入力を自動検証      |
 
 配布物の正本は`scripts/distribution.mjs`です。実行に必要なのは`main.js`・`manifest.json`・`styles.css`の3ファイルです。WASM・辞書はgzip＋base64としてbundleに内包し、既存の非同期辞書初期化でメモリ上へ復元します。実行時の通信やディスクへの展開は行いません。ビルドはminifyし、開発ビルドはインラインsource mapを付けます。
 
@@ -42,7 +45,7 @@ LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストー�
 | `src/word`                       | 辞書サービス、単語・書記素境界、テキストオブジェクト、行cache |
 | `src/markdown`                   | Markdown構造、テキストオブジェクト、Surround                  |
 | `src/table`                      | セルと親文書の座標対応、セル移動、ネイティブadapter           |
-| `src/probe`                      | 独立Vaultで使用する検証画面と記録                             |
+| `test/probe`                     | 配布対象外の検証プラグイン、検証画面と入力診断・記録          |
 | `patches`                        | 上流への汎用拡張点と対応する回帰テスト                        |
 
 カウント・レジスタ・マクロ・`.`は上流Vimのdispatcherを経由させます。親エディタのセッションを保ったまま本文とセルを編集対象として切り替え、セルの変更を親文書へ反映します。モード・記録とUndo／Redoは親ノートで共有し、セル再生成で新たな履歴を作りません。Obsidian内部table APIへのアクセスはネイティブadapterへ隔離します。
@@ -79,23 +82,39 @@ patchには上流への汎用的な接続点を置き、Obsidian固有処理は�
 
 prepare・build・typecheck・testは同じ生成先を置き換えるため、並列実行しません。生成ソースを編集中なら先に差分を保存します。`pnpm dev`のpatch適用は起動時だけなので、patch・seriesの変更後は監視プロセスを再起動します。
 
+## 依存関係の確認
+
+`pnpm audit:dependencies`は`pnpm audit --json`で開発用を含むnpm依存の全重大度を報告します。High・Criticalがある場合、通信に失敗した場合、応答を解釈できない場合は失敗し、Moderate以下だけなら成功します。自動修復や一律の除外は行いません。依存の更新時と公開前に実行し、検出内容と更新の影響を確認してください。
+
+npmの検査だけでは、GitサブモジュールのVim、独自patch、WASM内部の依存を網羅できません。更新時と公開前には[上流Vim](https://github.com/replit/codemirror-vim/security)と[Lindera](https://github.com/lindera/lindera/security)のセキュリティ情報・リリース変更を確認し、次の固定情報と照合します。
+
+- Vimのgitlinkと`patches/series.json`の`baseCommit`を照合し、patchの適用と対応する回帰テストを確認する。
+- `lindera-wasm`のバージョンとlockfileのintegrity、同梱WASMの出所を確認する。
+- `scripts/lindera-assets.mjs`の辞書版・取得元・SHA-256を照合する。ハッシュだけを更新して検証エラーを解消せず、取得元と変更内容を確認する。
+
 ## 検証
 
 `pnpm check`で本体・テスト・配布物を検査します。`typecheck`は上流ソースを準備した後、3回の`tsc`コマンドで上流JavaScriptの型宣言、`tsconfig.vendor.json`によるwrapperの型宣言、本体・テストの型検査を順に実行します。上流の型宣言生成は`--noCheck`、本体とテストはstrict設定を使います。整形・静的解析の対象外は各設定ファイルに定義し、上流ソース、patch本文、内容保持が必要なfixtureを一括整形しません。
+
+`eslint-plugin-obsidianmd`の推奨設定は本体ソースとmanifest・package情報を対象とし、テスト・生成物・上流ソースを除外します。型情報を使うため、`pnpm lint:obsidian`は`pnpm typecheck`の後に実行します。Oxlintと併用し、警告も失敗として扱います。設定画面は`getSettingDefinitions()`で検索に対応し、日本語の表示、JSONの検証とエラー、保存・反映を実機でも確認します。
 
 Vitestは`test/**/*.test.ts`の機能テストを実行します。`test/word/native-objects.json`はNeovimの動作に対応する固定期待値です。単体テストはこのfixtureを直接読み込み、Neovimを実行しません。設定の不正値回復、辞書失敗・破棄、provider交換、入力・履歴・セルの回帰テストとfixtureを維持します。
 
 `test/input/operation-coverage.test.ts`は対応する操作をデータ駆動で実行し、本文とネイティブセルのDOMキー入力から、文書・カーソル・選択・モード・レジスタ・履歴を確認します。画面座標に依存する操作と実際のObsidian UI競合は実機suiteで確認します。engineのdispatcherを直接呼ぶ既存の詳細テストも維持しますが、それだけではホストとの入力競合の合格条件にはしません。
 
-実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.13.7 archiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。`probeEnabled`の通常の既定値は`false`です。
+実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。`probe`と`test:e2e`は検証用の`lindvimera-test-harness`を別ビルドして導入します。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.13.7 archiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。
+
+検証画面、入力診断、診断ファイルの書き込みと検証用CSSはharnessだけに含めます。本番には検証機能を登録せず、古い保存設定にある`probeEnabled`も無視します。harnessは本番インスタンスの読み取り専用`runtime`（契約バージョン`1`）からVim・セッション・単語・テーブル処理の同じ実装参照を使い、エンジンを再生成しません。契約が一致しなければ検証を失敗させます。この接続口は内部検証用で、安定した外部拡張APIではありません。esbuildの入力一覧で本番への検証コード混入と、harnessへの本体・Vimエンジンの再取り込みを検査します。
 
 検証画面の各suiteで本文・セル編集、選択、記録再生、親Undo／Redo、ホットキー、モード切替を確認し、物理キー入力は別途確認します。実IME操作はこの検証の対象外です。`node scripts/probe/run.mjs --offline`はテストVaultのrendererでHTTP(S) fetch/XHRを失敗させ、同梱辞書での動作を検査するための模擬環境です。
 
-`pnpm test:e2e`は現在の`dist/`を新しい検証Vaultへ導入し、Obsidianを起動して必須suiteをその場で検査します。保存設定なしで起動した本文で`i → abcjj → Esc`を確認し、既定では`jj`を本文・挿入記録へ残します。Source・Live Preview・セルの入力競合、取消、ホストへの委譲と、OS入力の代表ケースを検証します。必要な項目の欠落・失敗ではコマンドを失敗させます。実行結果と診断ファイルは`.test-runtime/results/`へ出力し、Gitへ追加しません。
+`pnpm test:e2e`は現在の`dist/`を再ビルドせず新しい検証Vaultへ導入します。オフライン検証用プラグインを起動前から有効にし、harnessは無効・保存設定なしで通常起動を検証します。本番だけで検証コマンド・ビュー・診断ファイルが現れないこと、本文で`i → abcjj → Esc`を入力すると既定では`jj`が本文・挿入記録に残ることを確認してから、harnessを有効にして必須suiteを実行します。
+
+Source・Live Preview・セルの入力競合、取消、ホストへの委譲、OS入力の代表ケース、本番とharnessのセッション・レジスタ共有を検証します。配布候補、導入直後、E2E終了後の標準3ファイルのSHA-256が一致することも確認します。必要な項目の欠落・失敗ではコマンドを失敗させます。実行結果と診断ファイルは`.test-runtime/results/`へ出力し、Gitへ追加しません。記録には入力や本文が含まれる場合があるため、独立Vaultだけで使い、共有前に内容を確認してください。
 
 ## GitHub Actionsとリリース
 
-mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`e2e`はbuildのartifactをそのまま使用し、`release-ready`はすべての成功を必須にします。失敗・キャンセル・スキップはリリース可能と扱いません。Node.js 24、pnpm 12.4.2、固定版サブモジュールとlockfileを使用します。
+mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`quality`は型検査の後に公式Lintを実行し、依存関係検査も行います。`e2e`はbuildのartifactをそのまま使用し、`release-ready`はすべての成功を必須にします。失敗・キャンセル・スキップはリリース可能と扱いません。Node.js 24、pnpm 12.4.2、固定版サブモジュールとlockfileを使用します。
 
 Releaseの公開処理は`scripts/release/publish.ps1`で実行します。`quality`では`test/release/publish.test.ps1`も実行し、GitHub通信とGit操作をモック化してドラフト作成・再開・公開条件を検査します。ローカルでは`pwsh -NoProfile -File test/release/publish.test.ps1`で実行でき、実際のReleaseやタグは変更しません。
 
@@ -103,7 +122,9 @@ workflow全体はブランチ単位の共通concurrency groupで直列実行し�
 
 pnpm storeのcacheはbuildだけが保存し、他ジョブは復元だけを行います。キーはブランチ、OS・architecture、Node・pnpm版、lockfileとworkspace設定のhashで分けます。IPADICの検証済み辞書ZIPはbuild、Obsidianの固定installer・archiveはe2eだけが保存します。cache miss時は通常のインストール・検証付き取得を行い、cacheがなくても検証できる構成です。`node_modules`、生成ソース、dist、Vault・profile・レポートはcacheしません。
 
-自動E2Eはworkflow内でSHA-256固定の公式Obsidian 1.13.7を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。`release-ready`はE2Eジョブの成功と配布ファイル・バージョン・source mapの有無を確認してパッケージ化します。
+自動E2Eはworkflow内でSHA-256固定の公式Obsidian 1.13.7を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。`release-ready`はE2Eジョブの成功と配布ファイル・バージョン・source mapの有無を確認してパッケージ化します。
+
+パッケージ作成後、`release-ready`で`actions/attest@v4`を使い、標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。証明生成の書き込み権限は同ジョブだけに付与し、E2E済みの配布物を再ビルドしません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
 
 開発中の`release-ready`はバージョンが公開済みでも成功できます。実リリースは次の手順で行います。
 
@@ -112,7 +133,7 @@ pnpm storeのcacheはbuildだけが保存し、他ジョブは復元だけを行
 3. `git fetch origin`後、releaseへ切り替え、`git merge --ff-only <CI成功済みSHA>`、`git push origin release`を実行します。mainがさらに進んでいても、確認済みSHAを指定します。初回は`git switch -c release <CI成功済みSHA>`で作成します。作業ツリーに未コミット変更がある場合は先に保存します。
 4. `git tag -a x.y.z <CI成功済みSHA> -m x.y.z`、`git push origin refs/tags/x.y.z`を実行します。タグには`v`を付けません。
 
-タグworkflowは対象SHAがreleaseの履歴内にあることと、同じSHAの最新main push CI・全5ジョブの成功を確認します。CIの公開artifactをそのまま取得し、run ID・attempt・バージョン・全ファイルのhashを照合します。公開直前にもタグを再確認し、draftへ全assetを揃えてからGitHub Releaseを公開します。添付物は標準3ファイル、ZIP、`SHA256SUMS`、検証元を記録した`provenance.json`です。公式レジストリへの申請やnpm公開は行いません。
+タグworkflowは対象SHAがreleaseの履歴内にあることと、同じSHAの最新main push CI・全5ジョブの成功を確認します。CIの公開artifactをそのまま取得し、run ID・attempt・バージョン・全ファイルのhashを照合します。検証ジョブと公開処理の両方で、全6ファイルのAttestationを`gh attestation verify`によりリポジトリ・CI workflow・main参照・対象コミットへ照合します。証明の欠落・不一致・通信失敗ではdraft作成・アップロード・公開を開始しません。公開直前にもタグを再確認し、draftへ全assetを揃えてからGitHub Releaseを公開します。添付物は標準3ファイル、ZIP、`SHA256SUMS`、検証元を記録した`provenance.json`です。公式レジストリへの申請やnpm公開は行いません。
 
 artifactとE2E診断ファイルは90日間保持します。公開artifactの欠落・失効・CI失敗・provenance不一致の場合は公開しません。復旧時は同じコミットのmain CIで **Re-run all jobs** を実行し、全成功後にrelease workflowも全ジョブ再実行して新しいCIの出所を検証します。main CIの失敗ジョブだけの再実行ではattemptが揃わないため公開判定は通りません。公開前の通信障害で同じ検証済みartifactを使用する場合は、release workflowの失敗ジョブだけを再実行でき、同一内容のdraftを再開します。ジョブ間の検証済みartifactは7日間保持するため、失効後はrelease workflowの全ジョブを再実行します。公開済みReleaseと内容・出所が一致すれば何も変更せず成功し、違う場合は上書きしません。既に公開したバージョンの差し替えは新しいバージョンで行います。
 

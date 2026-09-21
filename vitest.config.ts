@@ -2,6 +2,15 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  plugins: [
+    {
+      name: "obsidian-test-runtime",
+      resolveId(id) {
+        // Obsidian's package contains types only; tests supply its runtime with vi.mock.
+        if (id === "obsidian") return id;
+      },
+    },
+  ],
   resolve: {
     alias: {
       "@replit/codemirror-vim": fileURLToPath(
@@ -18,6 +27,7 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     environment: "jsdom",
+    setupFiles: ["./test/obsidian-dom.ts"],
     restoreMocks: true,
     clearMocks: true,
     testTimeout: 15000,

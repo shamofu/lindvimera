@@ -10,6 +10,10 @@ import { promisify } from "node:util";
 import { chromium } from "playwright-core";
 import { prepareProbe } from "./run.mjs";
 import { keyboardChecks, runKeyboardRegression } from "./keyboard-regression.mjs";
+import { runSettingsRegression } from "./settings-regression.mjs";
+import { distributionDirectory } from "../distribution.mjs";
+import { verifyRuntimeFiles } from "./artifact-identity.mjs";
+import { harnessId } from "./build.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const execute = promisify(execFile);
@@ -104,6 +108,8 @@ export async function runCiProbe() {
     ...screenshots,
     "renderer.log",
     "keyboard-regression.json",
+    "settings-regression.json",
+    "artifact-identity.json",
   ])
     await rm(join(results, name), { force: true });
   const runtime = join(root, ".test-runtime", "runs", randomUUID());
@@ -223,20 +229,25 @@ export async function runCiProbe() {
       join(results, "keyboard-regression.json"),
       JSON.stringify(keyboardResults, null, 2),
     );
+    const settingsResults = await runSettingsRegression(page);
+    await writeFile(
+      join(results, "settings-regression.json"),
+      JSON.stringify(settingsResults, null, 2),
+    );
     // Only after testing production defaults do we opt into the separate regression
     // workbench and its explicit jj configuration. No data.json existed at startup.
-    await page.evaluate(async () => {
+    await page.evaluate(async (id) => {
       const app = globalThis.app;
       const plugin = app.plugins.plugins.lindvimera;
       Object.assign(plugin.settings, {
-        probeEnabled: true,
         escapeSequences: ["jj"],
         escapeTimeoutMs: 200,
       });
       await plugin.saveSettings();
-      await app.plugins.unloadPlugin("lindvimera");
-      await app.plugins.loadPlugin("lindvimera");
-    });
+      await app.plugins.loadPlugin(id);
+      if (app.plugins.plugins[id]?.production !== plugin)
+        throw new Error("The harness must attach to the existing production plugin instance.");
+    }, harnessId);
     await page.waitForFunction(
       () => globalThis.app.workspace.getLeavesOfType("lindvimera-input-probe")[0]?.view,
       undefined,
@@ -246,13 +257,16 @@ export async function runCiProbe() {
     await bounded(
       page.evaluate(() => globalThis.app.plugins.plugins.lindvimera.wordsReady),
       90_000,
-      "reloaded workbench dictionary initialization",
+      "workbench dictionary initialization",
     );
-    await page.evaluate(async (checks) => {
-      await globalThis.app.workspace
-        .getLeavesOfType("lindvimera-input-probe")[0]
-        .view.recordKeyboardRegression(checks);
-    }, keyboardResults);
+    await page.evaluate(
+      async (checks) => {
+        await globalThis.app.workspace
+          .getLeavesOfType("lindvimera-input-probe")[0]
+          .view.recordKeyboardRegression(checks);
+      },
+      { ...keyboardResults, ...settingsResults },
+    );
     await page.screenshot({ path: join(results, "ready.png") });
     const runSuite = async (method) => {
       console.log(`Obsidian E2E: ${method}`);
@@ -284,6 +298,31 @@ export async function runCiProbe() {
         ),
     );
     await page.screenshot({ path: join(results, "table.png") });
+    await page.evaluate(async (id) => {
+      const app = globalThis.app;
+      const parent = app.workspace
+        .getLeavesOfType("markdown")
+        .find((leaf) => leaf.view.file?.path === "Native table.md").view.editMode.cm;
+      const harness = app.plugins.plugins[id];
+      harness.verifyRuntimeVersionGuard();
+      harness.verifyRuntimeIdentity(parent);
+      await app.workspace
+        .getLeavesOfType("lindvimera-input-probe")[0]
+        .view.recordKeyboardRegression({
+          "harness-runtime-identity": {
+            passed: true,
+            detail:
+              "The harness uses the installed plugin's Vim, parent editor and session registry.",
+            observedAt: new Date().toISOString(),
+          },
+          "harness-runtime-version": {
+            passed: true,
+            detail:
+              "An incompatible runtime version is rejected before rebinding any suite references.",
+            observedAt: new Date().toISOString(),
+          },
+        });
+    }, harnessId);
     await runSuite("runNativeRegression");
     await runSuite("runHostRegression");
     await runSuite("preparePhysicalInput");
@@ -299,6 +338,24 @@ export async function runCiProbe() {
       { timeout: 10_000 },
     );
     await runSuite("verifyPhysicalInput");
+    await page.evaluate(
+      async (id) => globalThis.app.plugins.plugins[id].flushDiagnostics(),
+      harnessId,
+    );
+    const finalHashes = await verifyRuntimeFiles(environment.candidateHashes, environment.plugin);
+    await verifyRuntimeFiles(environment.candidateHashes, distributionDirectory);
+    await writeFile(
+      join(results, "artifact-identity.json"),
+      JSON.stringify(
+        {
+          candidate: environment.candidateHashes,
+          installed: environment.installedHashes,
+          afterE2e: finalHashes,
+        },
+        null,
+        2,
+      ),
+    );
     const report = JSON.parse(
       await readFile(join(environment.vault, "Lindvimera acceptance.json"), "utf8"),
     );
@@ -313,6 +370,9 @@ export async function runCiProbe() {
     assert.equal(report.environment?.plugin, manifest.version);
     const required = [
       ...keyboardChecks,
+      ...Object.keys(settingsResults),
+      "harness-runtime-identity",
+      "harness-runtime-version",
       "ascii-escape-recording",
       "macro-independent-of-escape-setting",
       "body-change-single-undo",

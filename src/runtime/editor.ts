@@ -47,6 +47,13 @@ interface WordConfiguration {
   id: string;
 }
 
+// Keep the original method identities for restoration, while requiring their
+// editor receiver explicitly whenever the saved methods are invoked.
+interface EditorLifecycle {
+  setState: (this: EditorView, state: EditorState) => void;
+  destroy: (this: EditorView) => void;
+}
+
 /** Exactly one instance per parent editor, including all its native table cells. */
 export class EditorSession {
   readonly cm: NonNullable<ReturnType<typeof getCM>>;
@@ -74,7 +81,11 @@ export class EditorSession {
     const cm = getCM(view);
     if (!cm) throw new Error("Lindvimera engine was not initialized.");
     this.cm = cm;
-    this.removePolicy = installCommandPolicy(cm as CodeMirrorV, host.settings, host.error);
+    this.removePolicy = installCommandPolicy(
+      cm as CodeMirrorV,
+      () => host.settings(),
+      host.error ? (message) => host.error?.(message) : undefined,
+    );
     this.inputTarget = view;
     history.attach(cm);
     this.table = new NativeTableSession(cm, {
@@ -116,8 +127,9 @@ export class EditorSession {
     });
     // Flush before CodeMirror replaces its state or detaches the editor. A plugin's
     // destroy callback itself runs too late to dispatch a pending literal safely.
-    const originalSetState = view.setState;
-    const originalDestroy = view.destroy;
+    const lifecycle: EditorLifecycle = view;
+    const originalSetState = lifecycle.setState;
+    const originalDestroy = lifecycle.destroy;
     const setState: EditorView["setState"] = (state) => {
       this.finishInsert();
       originalSetState.call(view, state);
@@ -193,7 +205,7 @@ export class EditorSession {
   cancelPendingInput(): void {
     this.escape.flush();
     cancelMarkdownInput(this.cm as CodeMirrorV);
-    Vim.cancelPendingInput(this.cm as CodeMirrorV);
+    Vim.cancelPendingInput(this.cm);
     this.modeChanged();
   }
 
@@ -207,8 +219,9 @@ export class EditorSession {
       this.inputTarget = next;
       if (next !== this.view) {
         // Native cell editors are recreated independently of their parent editor.
-        const originalSetState = next.setState;
-        const originalDestroy = next.destroy;
+        const lifecycle: EditorLifecycle = next;
+        const originalSetState = lifecycle.setState;
+        const originalDestroy = lifecycle.destroy;
         const setState: EditorView["setState"] = (state) => {
           this.escape.flush();
           originalSetState.call(next, state);
@@ -460,7 +473,7 @@ export class EditorSession {
       motions: settings.markdownMotions,
       textObjects: settings.textObjects,
       surround: settings.surround,
-      openLink: this.host.openLink,
+      openLink: this.host.openLink ? (linktext) => this.host.openLink?.(linktext) : undefined,
     });
     this.modeChanged();
   }

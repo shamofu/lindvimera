@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   actions: read
+  attestations: read
 
 concurrency:
   group: lindvimera-refs/heads/release
@@ -90,6 +91,9 @@ jobs:
           foreach ($file in $sums.Keys) { if ($sums[$file] -cne $hashes[$file]) { throw "SHA256SUMS mismatch: $file" } }
           $artifactManifest = Get-Content "$directory/manifest.json" -Raw | ConvertFrom-Json
           if ($artifactManifest.id -ne 'lindvimera' -or $artifactManifest.version -ne $tag) { throw 'Artifact manifest differs from the tag.' }
+          foreach ($file in $files) {
+            gh attestation verify "$directory/$file" --repo $repo --signer-workflow "$repo/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest $commit --deny-self-hosted-runners --limit 1000
+          }
           [ordered]@{
             schemaVersion = 1; repository = $repo; commit = $commit; version = $tag
             runId = [string]$run.id; runAttempt = $run.run_attempt; artifactId = $artifacts[0].id; hashes = $hashes
@@ -110,6 +114,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      attestations: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:

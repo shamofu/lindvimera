@@ -175,7 +175,7 @@ export class NativeTableContext {
     const rows: TableCell[][] = [];
     for (let row = 0; row < table.rows.length; row++) {
       const nativeRow = table.rows[row];
-      const modelRow = model.rows[row]!;
+      const modelRow = model.rows[row];
       if (!Array.isArray(nativeRow) || nativeRow.length !== modelRow.length) {
         throw new TableSourceError("Native/source table columns disagree.");
       }
@@ -190,7 +190,7 @@ export class NativeTableContext {
             throw new TableSourceError("Native cell identity is unsupported.");
           }
           const range = cell.getAbsoluteOffsets();
-          const parsed = modelRow[column]!;
+          const parsed = modelRow[column];
           if (
             ![range.start, range.end, range.textStart, range.textEnd].every(Number.isInteger) ||
             range.start !== parsed.from ||

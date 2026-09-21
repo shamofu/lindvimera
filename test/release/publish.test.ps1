@@ -53,6 +53,14 @@ function git {
 function gh {
   $mockArguments = @($args)
   $mockBase = "repos/$($ReleaseTestState.Repository)"
+  if ($mockArguments[0] -eq 'attestation' -and $mockArguments[1] -eq 'verify') {
+    $mockAssetName = [System.IO.Path]::GetFileName($mockArguments[2])
+    Assert-ReleaseTest ($mockAssetName -cin $ReleaseTestState.Files) 'Unexpected attestation subject.'
+    Assert-ReleaseTestArguments $mockArguments @('attestation', 'verify', ".release-gate/artifact/$mockAssetName", '--repo', $ReleaseTestState.Repository, '--signer-workflow', "$($ReleaseTestState.Repository)/.github/workflows/ci.yml", '--source-ref', 'refs/heads/main', '--source-digest', $ReleaseTestState.Commit, '--deny-self-hosted-runners', '--limit', '1000')
+    $ReleaseTestState.Calls.Add(@{ Kind = 'attestation'; Arguments = $mockArguments; Name = $mockAssetName })
+    if ($ReleaseTestState.InvalidAttestation -ceq $mockAssetName) { throw "Attestation verification failed: $mockAssetName" }
+    return
+  }
   if ($mockArguments[0] -eq 'api') {
     $mockEndpoint = $mockArguments[1]
     if ($mockEndpoint -ceq "$mockBase/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$($ReleaseTestState.Commit)&per_page=100") {
@@ -119,7 +127,7 @@ function Initialize-ReleaseTestFixture {
   $script:ReleaseTestState = @{
     Repository = 'test-owner/test-repository'; Tag = '1.2.3'; Commit = ('a' * 40); ReleaseId = 24680
     Calls = [System.Collections.Generic.List[object]]::new(); Assets = [System.Collections.Generic.List[object]]::new()
-    Releases = @(); TagChecks = 0; TagMovedAt = 0; CorruptRemote = ''; DropUpload = $false
+    Releases = @(); TagChecks = 0; TagMovedAt = 0; CorruptRemote = ''; DropUpload = $false; InvalidAttestation = ''
     Files = @('main.js', 'manifest.json', 'styles.css', 'lindvimera-1.2.3.zip', 'SHA256SUMS', 'provenance.json')
     Jobs = @('quality', 'unit', 'build', 'e2e', 'release-ready') | ForEach-Object { @{ name = $_; status = 'completed'; conclusion = 'success' } }
   }
@@ -187,6 +195,8 @@ foreach ($environmentName in @('GITHUB_REPOSITORY', 'GITHUB_REF_NAME', 'GITHUB_S
 }
 try {
   Invoke-ReleaseTestCase 'creates and publishes using the response while the release list stays empty' -Verify {
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'attestation').Count -eq 6) 'Every release asset must have verified provenance.'
+    Assert-ReleaseTest (($ReleaseTestState.Calls | Where-Object Kind -In @('attestation', 'create') | Select-Object -Last 1).Kind -eq 'create') 'All attestations must be checked before creating a draft.'
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'list').Count -eq 1) 'Creation must not reread the release list.'
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'create').Count -eq 1) 'Expected exactly one draft creation.'
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'assets').Count -eq 2) 'Expected checks before and after upload using the returned release ID.'
@@ -235,6 +245,7 @@ try {
     Add-ReleaseTestAssets $ReleaseTestState.Files
   } -Verify {
     Assert-ReleaseTestNoWrites
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'attestation').Count -eq 6) 'Published releases must still have verified provenance.'
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'download').Count -eq 6) 'Published assets must all be verified.'
   }
   Invoke-ReleaseTestCase 'refuses to repair an incomplete published release' -Arrange {
@@ -248,6 +259,14 @@ try {
   Invoke-ReleaseTestCase 'rejects locally changed release content' -Arrange {
     Add-Content -LiteralPath .release-gate/artifact/main.js -Value 'tampered'
   } -Failure 'Release file changed: main.js' -Verify { Assert-ReleaseTestNoWrites }
+  foreach ($attestationFile in @('main.js', 'manifest.json', 'styles.css', 'lindvimera-1.2.3.zip', 'SHA256SUMS', 'provenance.json')) {
+    Invoke-ReleaseTestCase "rejects failed attestation verification for $attestationFile" -Arrange {
+      $ReleaseTestState.InvalidAttestation = $attestationFile
+    } -Failure 'Attestation verification failed' -Verify {
+      Assert-ReleaseTestNoWrites
+      Assert-ReleaseTest ((Get-ReleaseTestCalls 'list').Count -eq 0) 'Attestation failure must stop before accessing a release.'
+    }
+  }
   Invoke-ReleaseTestCase 'rejects remote content with a different checksum' -Arrange {
     $ReleaseTestState.Releases = @(New-ReleaseTestRelease)
     Add-ReleaseTestAssets @('main.js')

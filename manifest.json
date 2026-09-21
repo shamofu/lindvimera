@@ -3,7 +3,7 @@
   "name": "Lindvimera",
   "version": "0.1.0",
   "minAppVersion": "1.13.7",
-  "description": "Japanese-aware Vim editing for Obsidian.",
+  "description": "Japanese-aware Vim editing with Markdown commands and native table support.",
   "author": "shamofu",
   "isDesktopOnly": true
 }

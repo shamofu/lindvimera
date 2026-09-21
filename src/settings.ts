@@ -20,8 +20,6 @@ export interface LindvimeraSettings {
   escapeSequences: string[];
   escapeTimeoutMs: number;
   keyBindings: KeyBinding[];
-  /** Event recording and test commands are opt-in, for the isolated test vault. */
-  probeEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: LindvimeraSettings = {
@@ -36,7 +34,6 @@ export const DEFAULT_SETTINGS: LindvimeraSettings = {
   escapeSequences: [],
   escapeTimeoutMs: 200,
   keyBindings: [],
-  probeEnabled: false,
 };
 
 function readKeyBindings(value: unknown): KeyBinding[] {
@@ -93,7 +90,6 @@ export function loadSettings(value: unknown): LindvimeraSettings {
     "surround",
     "tables",
     "showStatus",
-    "probeEnabled",
   ] as const;
   for (const key of flags) if (typeof data[key] === "boolean") result[key] = data[key];
   result.linderaMode = data.linderaMode === "decompose" ? "decompose" : "normal";

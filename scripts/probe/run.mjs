@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { distributionDirectory, runtimeFiles } from "../distribution.mjs";
+import { buildProbe, harnessId } from "./build.mjs";
+import { hashRuntimeFiles, verifyRuntimeFiles } from "./artifact-identity.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export async function prepareProbe({
@@ -17,16 +19,20 @@ export async function prepareProbe({
   const profile = join(runtime, "profile");
   const vault = join(runtime, "Lindvimera Test Vault");
   const plugin = join(vault, ".obsidian", "plugins", "lindvimera");
+  const harness = join(vault, ".obsidian", "plugins", harnessId);
 
   await access(executable);
   await access(archive);
   await mkdir(profile, { recursive: true });
   await mkdir(plugin, { recursive: true });
+  const candidateHashes = await hashRuntimeFiles(distributionDirectory);
   for (const file of runtimeFiles) {
     const target = join(plugin, file);
     await mkdir(dirname(target), { recursive: true });
     await copyFile(join(distributionDirectory, file), target);
   }
+  const installedHashes = await verifyRuntimeFiles(candidateHashes, plugin);
+  await buildProbe(harness);
   await copyFile(archive, join(profile, "obsidian-1.13.7.asar"));
   const config = {
     vaults: { "0000000000000017": { path: vault, ts: Date.now(), open: true } },
@@ -38,13 +44,13 @@ export async function prepareProbe({
     await writeFile(
       join(plugin, "data.json"),
       JSON.stringify({
-        probeEnabled: true,
         enabled: true,
         escapeSequences: ["jj"],
         escapeTimeoutMs: 200,
       }),
     );
   const enabledPlugins = ["lindvimera"];
+  if (!cleanInstall) enabledPlugins.push(harnessId);
   if (offline) {
     const offlinePlugin = join(vault, ".obsidian", "plugins", "lindvimera-offline-probe");
     await mkdir(offlinePlugin, { recursive: true });
@@ -107,7 +113,7 @@ module.exports = class extends Plugin {
   await rm(join(vault, ".obsidian", "core-plugins.json"), { force: true });
   const fixture = join(root, "test", "fixtures", "native-table.md");
   await copyFile(fixture, join(vault, "Native table.md"));
-  return { executable, archive, profile, vault, runtime };
+  return { executable, archive, profile, vault, runtime, plugin, candidateHashes, installedHashes };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

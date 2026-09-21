@@ -1,9 +1,8 @@
 import { MarkdownView, TFile, type App } from "obsidian";
 import { Transaction } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { getCM, Vim } from "@replit/codemirror-vim";
-import type LindvimeraPlugin from "../main";
-import { editorSession } from "../runtime/editor";
+import type LindvimeraPlugin from "../../src/main";
+import { getCM, Vim, editorSession } from "./runtime";
 
 type Check = (name: string, callback: () => void | Promise<void>) => Promise<void>;
 type Owner = { cm: EditorView; sourceMode: boolean };
@@ -29,7 +28,6 @@ function physical(view: EditorView, text: string) {
 
 /** Disposable test documents and settings; never registered in a user's ordinary Vault. */
 export async function runHostRegression(plugin: LindvimeraPlugin, check: Check): Promise<void> {
-  if (!plugin.settings.probeEnabled) throw new Error("Regression workbench is disabled.");
   const saved = {
     ...plugin.settings,
     keyBindings: [...plugin.settings.keyBindings],

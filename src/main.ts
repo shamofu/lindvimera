@@ -6,17 +6,13 @@ import {
   MarkdownView,
   Notice,
   Plugin,
-  PluginSettingTab,
-  Setting,
   Scope,
   type App,
   type Events,
   type KeymapEventHandler,
 } from "obsidian";
-import { checkedEscapeSettings } from "./input/escape";
 import { analyseKeyBindings } from "./input/policy";
 import {
-  checkedKeyBindings,
   DEFAULT_SETTINGS,
   loadSettings,
   type KeyBinding,
@@ -25,7 +21,8 @@ import {
 import { editorSession, lindvimeraEditor } from "./runtime/editor";
 import { installMarkdownCommands } from "./markdown";
 import { installTableCommands } from "./table/session";
-import { ProbeView, PROBE_VIEW_TYPE } from "./probe/view";
+import { LindvimeraSettingTab } from "./settings-tab";
+import { internalRuntime } from "./runtime/internal";
 import { budouxSegmenter, type JapaneseSegmenter } from "./word";
 import { JapaneseWordService, type LinderaMode } from "./word/service";
 import embeddedAssets from "lindvimera:assets";
@@ -47,6 +44,7 @@ function ownerOf(view: EditorView): EditorOwner | undefined {
 }
 
 export default class LindvimeraPlugin extends Plugin {
+  readonly runtime = internalRuntime;
   settings: LindvimeraSettings = { ...DEFAULT_SETTINGS };
   private editors = new Set<{ refresh(): void; flush(): void; disable(): void }>();
   private bindings: KeyBinding[] = [];
@@ -214,53 +212,12 @@ export default class LindvimeraPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshEditors()));
     this.addCommand({
       id: "toggle-enabled",
-      name: "Toggle Lindvimera",
+      name: "Toggle enabled",
       callback: () => {
         this.settings.enabled = !this.settings.enabled;
         void this.saveSettings();
       },
     });
-    if (this.settings.probeEnabled) {
-      const observedKeys: unknown[] = [];
-      let diagnosticWrite = Promise.resolve();
-      this.registerDomEvent(
-        document,
-        "keydown",
-        (event) => {
-          observedKeys.push({
-            key: event.key,
-            code: event.code,
-            trusted: event.isTrusted,
-            composing: event.isComposing,
-            target: (event.target as HTMLElement)?.className,
-            focus: document.activeElement?.className,
-          });
-          if (observedKeys.length > 30) observedKeys.shift();
-          const snapshot = JSON.stringify(observedKeys, null, 2);
-          diagnosticWrite = diagnosticWrite.then(() =>
-            this.app.vault.adapter.write("Lindvimera input diagnostics.json", snapshot),
-          );
-        },
-        true,
-      );
-      this.registerView(PROBE_VIEW_TYPE, (leaf) => new ProbeView(leaf, this));
-      this.addCommand({
-        id: "open-input-probe",
-        name: "Open regression workbench",
-        callback: () => void this.openProbe(),
-      });
-      const runNative = () => {
-        const probe = this.app.workspace.getLeavesOfType(PROBE_VIEW_TYPE)[0]?.view;
-        if (probe instanceof ProbeView) void probe.runNativeRegression();
-      };
-      this.addCommand({
-        id: "run-native-regression",
-        name: "Run native table regression",
-        callback: runNative,
-      });
-      this.addRibbonIcon("table", "Lindvimera: run native table regression", runNative);
-      this.app.workspace.onLayoutReady(() => void this.openProbe());
-    }
     this.refreshEditors();
     if (this.settings.japanese) this.wordsReady = this.words.load();
   }
@@ -308,141 +265,5 @@ export default class LindvimeraPlugin extends Plugin {
     for (const editor of this.editors) editor.disable();
     this.words?.dispose();
     for (const binding of this.bindings) Vim.unmap(binding.from, binding.mode);
-  }
-
-  async openProbe(): Promise<void> {
-    if (!this.settings.probeEnabled) return;
-    const leaf =
-      this.app.workspace.getLeavesOfType(PROBE_VIEW_TYPE)[0] ?? this.app.workspace.getLeaf("tab");
-    await leaf.setViewState({ type: PROBE_VIEW_TYPE, active: true });
-    await this.app.workspace.revealLeaf(leaf);
-  }
-}
-
-class LindvimeraSettingTab extends PluginSettingTab {
-  constructor(
-    app: App,
-    private plugin: LindvimeraPlugin,
-  ) {
-    super(app, plugin);
-  }
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
-    containerEl.createEl("h2", { text: "Lindvimera" });
-    if (this.plugin.builtinVim())
-      containerEl.createEl("p", {
-        text: "組み込みVimが有効です。エディタ設定の「Vimキー割り当て」を無効にするとLindvimeraが動作します。",
-      });
-    const toggles = {
-      enabled: "Lindvimeraを有効にする",
-      japanese: "日本語の単語操作",
-      markdownMotions: "見出し・リスト移動",
-      textObjects: "Markdownテキストオブジェクト",
-      surround: "Surround",
-      tables: "Live Previewテーブル連携",
-      showStatus: "ステータスバーにモードを表示",
-    } as const;
-    for (const [key, name] of Object.entries(toggles)) {
-      const flag = key as keyof typeof toggles;
-      new Setting(containerEl).setName(name).addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings[flag]).onChange(async (value) => {
-          this.plugin.settings[flag] = value;
-          await this.plugin.saveSettings(flag === "japanese");
-          if (flag === "japanese") this.display();
-        }),
-      );
-      if (flag === "japanese") {
-        new Setting(containerEl)
-          .setName("日本語の分割モード")
-          .setDesc(
-            "標準：辞書にある複合語を保持（関西国際空港）。詳細：複合語をさらに分割（関西 / 国際 / 空港）。変更は進行中のコマンド・マクロの完了後に反映します。",
-          )
-          .addDropdown((dropdown) =>
-            dropdown
-              .addOption("normal", "標準：辞書にある複合語を保持")
-              .addOption("decompose", "詳細：複合語をさらに分割")
-              .setValue(this.plugin.settings.linderaMode)
-              .setDisabled(!this.plugin.settings.japanese)
-              .onChange(async (value) => {
-                this.plugin.settings.linderaMode = value === "decompose" ? "decompose" : "normal";
-                await this.plugin.saveSettings(true);
-              }),
-          );
-      }
-    }
-    const error = containerEl.createEl("p", { cls: "lindvimera-setting-error" });
-    new Setting(containerEl)
-      .setName("挿入モードの脱出キー")
-      .setDesc('JSON配列。例: ["jj", "jk"]。[]で無効。')
-      .addTextArea((input) =>
-        input
-          .setValue(JSON.stringify(this.plugin.settings.escapeSequences))
-          .onChange(async (value) => {
-            try {
-              const parsed: unknown = JSON.parse(value);
-              if (!Array.isArray(parsed) || !parsed.every((key) => typeof key === "string"))
-                throw new Error("文字列の配列を指定してください。");
-              const checked = checkedEscapeSettings({
-                sequences: parsed,
-                timeoutMs: this.plugin.settings.escapeTimeoutMs,
-              });
-              this.plugin.settings.escapeSequences = [...checked.sequences];
-              error.textContent = "";
-              await this.plugin.saveSettings();
-            } catch (reason) {
-              error.textContent = String(reason);
-            }
-          }),
-      );
-    new Setting(containerEl).setName("脱出キーの判定時間（ms）").addText((input) =>
-      input.setValue(String(this.plugin.settings.escapeTimeoutMs)).onChange(async (value) => {
-        try {
-          const checked = checkedEscapeSettings({
-            sequences: this.plugin.settings.escapeSequences,
-            timeoutMs: Number(value),
-          });
-          this.plugin.settings.escapeTimeoutMs = checked.timeoutMs;
-          error.textContent = "";
-          await this.plugin.saveSettings();
-        } catch (reason) {
-          error.textContent = String(reason);
-        }
-      }),
-    );
-    const bindingIssues = containerEl.createEl("p", { cls: "lindvimera-setting-error" });
-    const showBindingIssues = () => {
-      bindingIssues.textContent = analyseKeyBindings(this.plugin.settings.keyBindings)
-        .issues.map(
-          ({ binding, reason }) => `${binding.mode}: ${binding.from} → ${binding.to} — ${reason}`,
-        )
-        .join("\n");
-    };
-    showBindingIssues();
-    new Setting(containerEl)
-      .setName("モード別キー割り当て")
-      .setDesc(
-        'JSON配列。例: [{"mode":"normal","from":"H","to":"^"}]。mode: normal / insert / visual / operatorPending。未対応の操作を含む割り当ては保存したまま無効にします。',
-      )
-      .addTextArea((input) =>
-        input
-          .setValue(JSON.stringify(this.plugin.settings.keyBindings, null, 2))
-          .onChange(async (value) => {
-            try {
-              this.plugin.settings.keyBindings = checkedKeyBindings(JSON.parse(value));
-              error.textContent = "";
-              await this.plugin.saveSettings();
-              showBindingIssues();
-            } catch (reason) {
-              error.textContent = String(reason);
-            }
-          }),
-      );
-    if (this.plugin.settings.probeEnabled)
-      new Setting(containerEl)
-        .setName("回帰テスト")
-        .addButton((button) =>
-          button.setButtonText("開く").onClick(() => void this.plugin.openProbe()),
-        );
   }
 }

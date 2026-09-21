@@ -11,10 +11,11 @@ class Candidate extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
-    const span = view.dom.ownerDocument.createElement("span");
-    span.className = "lindvimera-escape-preview";
-    span.textContent = this.text;
-    return span;
+    const ownerWindow = view.dom.ownerDocument.win as Window & { createSpan: typeof createSpan };
+    return ownerWindow.createSpan({
+      cls: "lindvimera-escape-preview",
+      text: this.text,
+    });
   }
 }
 

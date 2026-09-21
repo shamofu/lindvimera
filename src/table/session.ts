@@ -134,7 +134,8 @@ export class NativeTableSession {
     this.targetIdentity = identity;
     if (next !== this.cm.cm6 && !this.attachments.has(next)) {
       const compartment = new Compartment();
-      const originalDestroy = next.destroy;
+      const lifecycle: { destroy: (this: EditorView) => void } = next;
+      const originalDestroy = lifecycle.destroy;
       const destroy = () => {
         this.attachments.delete(next);
         originalDestroy.call(next);
@@ -161,7 +162,7 @@ export class NativeTableSession {
     const current = context?.currentCell;
     if (!context || !current) return;
     const model = context.snapshot();
-    const width = model.rows[0]!.length;
+    const width = model.rows[0].length;
     const index = current.row * width + current.column;
     const next = Math.max(
       0,

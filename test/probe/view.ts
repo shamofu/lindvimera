@@ -2,15 +2,21 @@ import { ItemView, MarkdownView, TFile, apiVersion, type WorkspaceLeaf } from "o
 import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { history, undo, redo, undoDepth } from "@codemirror/commands";
-import { getCM, Vim } from "@replit/codemirror-vim";
-import type LindvimeraPlugin from "../main";
-import { WordBoundaryCache, wordSpans } from "../word";
-import type { LinderaMode } from "../word/service";
-import { editorSession, lindvimeraEditor } from "../runtime/editor";
-import { DEFAULT_SETTINGS, type LindvimeraSettings } from "../settings";
+import type LindvimeraPlugin from "../../src/main";
+import type { LinderaMode } from "../../src/word/service";
+import type { LindvimeraSettings } from "../../src/settings";
+import {
+  getCM,
+  Vim,
+  WordBoundaryCache,
+  wordSpans,
+  editorSession,
+  lindvimeraEditor,
+  DEFAULT_SETTINGS,
+  resolveNativeTable,
+  parseMarkdownTable,
+} from "./runtime";
 import { measureEditorPerformance } from "./performance";
-import { resolveNativeTable } from "../table/native-adapter";
-import { parseMarkdownTable } from "../table/source";
 import { runHostRegression } from "./host-regression";
 
 export const PROBE_VIEW_TYPE = "lindvimera-input-probe";

@@ -1,12 +1,9 @@
 import { historyField, redoDepth, undoDepth } from "@codemirror/commands";
-import { getCM, Vim } from "@replit/codemirror-vim";
 import { MarkdownView, Notice, Plugin, apiVersion } from "obsidian";
-import { editorSession } from "../runtime/editor";
-import { resolveNativeTable } from "../table/native-adapter";
-import type { NativeTableContext } from "../table/native-adapter";
-import type { CellPosition } from "../table/selection";
-import { parseMarkdownTable } from "../table/source";
-import type { MarkdownTable } from "../table/source";
+import { getCM, Vim, editorSession, resolveNativeTable, parseMarkdownTable } from "./runtime";
+import type { NativeTableContext } from "../../src/table/native-adapter";
+import type { CellPosition } from "../../src/table/selection";
+import type { MarkdownTable } from "../../src/table/source";
 
 export const TABLE_PROBE_REPORT_PATH = "Lindvimera table probe.json";
 type ProbeStatus = "passed" | "failed" | "unverified";

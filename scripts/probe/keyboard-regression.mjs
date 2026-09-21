@@ -153,7 +153,15 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
         return {
           saved: await app.vault.adapter.exists(".obsidian/plugins/lindvimera/data.json"),
           escape: app.plugins.plugins.lindvimera.settings.escapeSequences,
-          probe: app.plugins.plugins.lindvimera.settings.probeEnabled,
+          probeSetting: Object.hasOwn(app.plugins.plugins.lindvimera.settings, "probeEnabled"),
+          harnessLoaded: !!app.plugins.plugins["lindvimera-test-harness"],
+          probeLeaves: app.workspace.getLeavesOfType("lindvimera-input-probe").length,
+          probeCommands: Object.keys(app.commands.commands).filter((id) =>
+            /^(?:lindvimera|lindvimera-test-harness):(?:open-input-probe|run-native-regression|probe-native-table)$/.test(
+              id,
+            ),
+          ),
+          diagnosticFile: await app.vault.adapter.exists("Lindvimera input diagnostics.json"),
           builtin: app.isVimEnabled(),
           palette: !!app.commands.commands["command-palette:open"],
           search: !!app.commands.commands["global-search:open"],
@@ -162,7 +170,11 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
       assert.deepEqual(settings, {
         saved: false,
         escape: [],
-        probe: false,
+        probeSetting: false,
+        harnessLoaded: false,
+        probeLeaves: 0,
+        probeCommands: [],
+        diagnosticFile: false,
         builtin: false,
         palette: true,
         search: true,

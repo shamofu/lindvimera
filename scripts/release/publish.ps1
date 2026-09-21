@@ -32,6 +32,9 @@ if ((Compare-Object (Get-ChildItem $directory -Force).Name $files -CaseSensitive
 foreach ($file in $files) {
   if ((Get-FileHash "$directory/$file" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $info.hashes[$file]) { throw "Release file changed: $file" }
 }
+foreach ($file in $files) {
+  gh attestation verify "$directory/$file" --repo $repo --signer-workflow "$repo/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest $commit --deny-self-hosted-runners --limit 1000 | Out-Null
+}
 $identity = [ordered]@{
   schemaVersion = 1; commit = $commit; runId = $info.runId; runAttempt = $info.runAttempt
   artifactId = $info.artifactId; provenance = $info.hashes['provenance.json']

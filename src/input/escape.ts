@@ -34,8 +34,8 @@ export function validateEscapeSettings(settings: EscapeSettings): string[] {
   const sequences = [...seen];
   for (let index = 0; index < sequences.length; index += 1) {
     for (let other = index + 1; other < sequences.length; other += 1) {
-      const left = sequences[index]!;
-      const right = sequences[other]!;
+      const left = sequences[index];
+      const right = sequences[other];
       if (left.startsWith(right) || right.startsWith(left)) {
         errors.push(`Escape sequences cannot be complete prefixes: ${left}, ${right}`);
       }
@@ -69,7 +69,7 @@ export interface EscapeCallbacks {
 export class EscapeInputSession {
   private settings: EscapeSettings;
   private pending = "";
-  private timer: ReturnType<typeof setTimeout> | undefined;
+  private timer: number | undefined;
   private expiresAt = 0;
   private disposed = false;
 
@@ -114,7 +114,7 @@ export class EscapeInputSession {
     if (this.pending) {
       this.callbacks.onPreview?.(this.pending);
       this.expiresAt = Date.now() + this.settings.timeoutMs;
-      this.timer = setTimeout(() => this.flush(), this.settings.timeoutMs);
+      this.timer = window.setTimeout(() => this.flush(), this.settings.timeoutMs);
     }
     return true;
   }
@@ -143,7 +143,7 @@ export class EscapeInputSession {
   }
 
   private clearTimer(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer);
+    if (this.timer !== undefined) window.clearTimeout(this.timer);
     this.timer = undefined;
     this.expiresAt = 0;
   }

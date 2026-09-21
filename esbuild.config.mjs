@@ -15,6 +15,7 @@ import {
   prepareAssets,
 } from "./scripts/lindera-assets.mjs";
 import { prepareVendor, projectRoot } from "./scripts/prepare-vendor.mjs";
+import { assertBundleBoundary } from "./scripts/build-boundaries.mjs";
 
 prepareVendor();
 const watch = process.argv.includes("--watch");
@@ -28,6 +29,7 @@ const options = {
   entryPoints: ["src/main.ts"],
   outfile: join(distributionDirectory, "main.js"),
   bundle: true,
+  metafile: true,
   format: "cjs",
   platform: "browser",
   target: "es2022",
@@ -83,6 +85,7 @@ const options = {
         }));
         build.onEnd(async (result) => {
           if (result.errors.length === 0) {
+            assertBundleBoundary(result.metafile, "production");
             const bundlePath = join(distributionDirectory, "main.js");
             const footer = await Promise.all(
               retainedFiles.map(async (file) => {

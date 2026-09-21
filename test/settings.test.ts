@@ -1,6 +1,12 @@
 import { expect, it } from "vitest";
 import { checkedKeyBindings, DEFAULT_SETTINGS, loadSettings } from "../src/settings";
 
+it("ignores the obsolete probe flag without losing production settings", () => {
+  const settings = loadSettings({ probeEnabled: true, japanese: false, escapeSequences: ["jj"] });
+  expect(settings).not.toHaveProperty("probeEnabled");
+  expect(settings).toMatchObject({ japanese: false, escapeSequences: ["jj"] });
+});
+
 it("enables the implementation by default and recovers invalid persisted options", () => {
   expect(loadSettings(null)).toEqual(DEFAULT_SETTINGS);
   expect(

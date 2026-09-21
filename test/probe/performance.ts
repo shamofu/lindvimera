@@ -1,15 +1,16 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { history } from "@codemirror/commands";
-import { getCM, Vim } from "@replit/codemirror-vim";
-import { lindvimeraEditor } from "../runtime/editor";
-import { DEFAULT_SETTINGS } from "../settings";
+import type { JapaneseSegmenter } from "../../src/word";
 import {
+  getCM,
+  Vim,
+  lindvimeraEditor,
+  DEFAULT_SETTINGS,
   budouxSegmenter,
   installWordProvider,
   WordBoundaryCache,
-  type JapaneseSegmenter,
-} from "../word";
+} from "./runtime";
 
 export interface EditorPerformanceMetrics {
   schemaVersion: 1;
@@ -78,7 +79,6 @@ export function measureEditorPerformance(
     ...DEFAULT_SETTINGS,
     escapeSequences: [...DEFAULT_SETTINGS.escapeSequences],
     keyBindings: [],
-    probeEnabled: false,
   };
   const cache = new WordBoundaryCache(512, 262_144, true, segmenter);
   let view: EditorView | undefined;

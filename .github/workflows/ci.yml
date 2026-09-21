@@ -29,6 +29,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm typecheck
+      - run: pnpm lint:obsidian
+      - run: pnpm audit:dependencies
+      - name: Test dependency audit gate
+        run: node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs
       - name: Test release publication
         run: ./test/release/publish.test.ps1
 
@@ -149,6 +153,10 @@ jobs:
     needs: [quality, unit, build, e2e]
     runs-on: windows-2025
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Require every check to pass
         env:
@@ -238,6 +246,16 @@ jobs:
             version = $env:RELEASE_VERSION
             files = $taskHashes
           } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $taskRelease 'provenance.json') -Encoding utf8
+      - name: Attest the tested release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            .release/main.js
+            .release/manifest.json
+            .release/styles.css
+            .release/lindvimera-${{ steps.verify.outputs.version }}.zip
+            .release/SHA256SUMS
+            .release/provenance.json
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: release-${{ github.sha }}

@@ -68,10 +68,10 @@ function enabled(cm: object, feature: "motions" | "textObjects" | "surround"): b
 }
 
 function documentIndex(cm: CodeMirrorV): { text: string; index: MarkdownIndex } {
-  const editor = cm as CodeMirrorV & {
+  const editor: {
     cm6?: { state: { doc: object } };
     getEditingView?: () => { state: { doc: object } };
-  };
+  } = cm;
   const revision = (editor.getEditingView?.() ?? editor.cm6)?.state.doc;
   let cached = indexes.get(cm);
   if (revision && cached && cached.revision === revision) return cached;
