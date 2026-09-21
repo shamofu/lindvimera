@@ -1,0 +1,251 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 63ade04..c12badd 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -1180,6 +1180,23 @@ export function initVim(CM) {
+   var noremap = false;
+   /**@type {undefined | null | import("./types").PromptOptions} */
+   var virtualPrompt;
++  /** @arg {CodeMirrorV} cm @arg {() => void} resume */
++  function deferCommand(cm, resume) {
++    var macro = vimGlobalState.macroModeState;
++    var playing = macro.isPlaying;
++    var searches = macro.replaySearchQueries;
++    return cm.state.commandContinuation?.defer(function() {
++      var playingBefore = macro.isPlaying;
++      var searchesBefore = macro.replaySearchQueries;
++      macro.isPlaying = playing;
++      macro.replaySearchQueries = searches;
++      try { resume(); }
++      finally {
++        macro.isPlaying = playingBefore;
++        macro.replaySearchQueries = searchesBefore;
++      }
++    });
++  }
+   /**
+    * @arg {string} key
+    */
+@@ -1232,18 +1249,20 @@ export function initVim(CM) {
+    * @arg {vimKey|import("./types").exCommandDefinition|{noremap?: boolean}} [fromKey]
+    */
+   function doKeyToKey(cm, keys, fromKey) {
+-    var noremapBefore = noremap;
+     // prevent infinite recursion.
+-    if (fromKey) {
+-      if (keyToKeyStack.indexOf(fromKey) != -1) return;
+-      keyToKeyStack.push(fromKey);
+-      noremap = fromKey.noremap != false;
+-    }
+-
+-    try {
+-      var vim = maybeInitVimState(cm);
+-      var keyRe = /<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu;
+-
++    if (fromKey && keyToKeyStack.indexOf(fromKey) != -1) return;
++    var stack = keyToKeyStack.concat(fromKey ? [fromKey] : []);
++    var mappingNoremap = fromKey ? fromKey.noremap != false : noremap;
++    var vim = maybeInitVimState(cm);
++    var keyRe = /<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu;
++    run();
++
++    function run() {
++      var stackBefore = keyToKeyStack;
++      var noremapBefore = noremap;
++      keyToKeyStack = stack;
++      noremap = mappingNoremap;
++      try {
+       var match;
+       // Pull off one command key, which is either a single character
+       // or a special sequence wrapped in '<' and '>', e.g. '<Space>'.
+@@ -1252,11 +1271,13 @@ export function initVim(CM) {
+         var wasInsert = vim.insertMode;
+         if (virtualPrompt) {
+           sendKeyToPrompt(key);
++          if (deferCommand(cm, run)) return;
+           continue;
+         }
+ 
+         var result = vimApi.handleKey(cm, key, 'mapping');
+         if (cm.state.commandPolicy?.rejected) break;
++        if (deferCommand(cm, run)) return;
+ 
+         if (!result && wasInsert && vim.insertMode) {
+           if (key[0] == "<") {
+@@ -1279,14 +1300,15 @@ export function initVim(CM) {
+           cm.replaceSelection(key);
+         }
+       }
+-    } finally {
+-      keyToKeyStack.pop();
+-      noremap = keyToKeyStack.length ? noremapBefore : false;
+-      if (!keyToKeyStack.length && virtualPrompt) {
++      } finally {
++      keyToKeyStack = stackBefore;
++      noremap = noremapBefore;
++      if (!keyToKeyStack.length && virtualPrompt && !cm.state.commandContinuation?.pending) {
+         var promptOptions = virtualPrompt;
+         virtualPrompt = null;
+         showPrompt(cm, promptOptions);
+       }
++      }
+     }
+   }
+ 
+@@ -3174,9 +3196,13 @@ export function initVim(CM) {
+       } else {
+         macroModeState.latestRegister = registerName;
+       }
+-      while(repeat--){
+-        executeMacroRegister(cm, vim, macroModeState, registerName);
+-        if (cm.state.commandPolicy?.rejected) break;
++      run();
++      function run() {
++        while(repeat--){
++          executeMacroRegister(cm, vim, macroModeState, registerName);
++          if (cm.state.commandPolicy?.rejected) break;
++          if (deferCommand(cm, run)) return;
++        }
+       }
+     },
+     enterMacroRecordMode: function(cm, actionArgs) {
+@@ -4315,7 +4341,8 @@ export function initVim(CM) {
+   /** @arg {CodeMirror} cm @arg {Pos} oldCur @arg {Pos} newCur */
+   function recordJumpPosition(cm, oldCur, newCur) {
+     if (!cursorEqual(oldCur, newCur)) {
+-      vimGlobalState.jumpList.add(cm, oldCur, newCur);
++      if (cm.state.navigationProvider) cm.state.navigationProvider.recordJump(oldCur, newCur);
++      else vimGlobalState.jumpList.add(cm, oldCur, newCur);
+     }
+   }
+ 
+@@ -5769,6 +5796,9 @@ export function initVim(CM) {
+ 
+   /** @arg {CodeMirror} cm @arg {vimState} vim  @arg {string} markName */
+   function getMarkPos(cm, vim, markName) {
++    if (/^[a-z]$/.test(markName) && cm.state.navigationProvider) {
++      return cm.state.navigationProvider.resolveMark(markName);
++    }
+     if (markName == '\'' || markName == '`') {
+       return vimGlobalState.jumpList.find(cm, -1) || new Pos(0, 0);
+     } else if (markName == '.') {
+@@ -6962,40 +6992,46 @@ export function initVim(CM) {
+    */
+   function executeMacroRegister(cm, vim, macroModeState, registerName) {
+     var register = vimGlobalState.registerController.getRegister(registerName);
+-    if (registerName == ':') {
+-      // Read-only register containing last Ex command.
+-      if (register.keyBuffer[0]) {
+-        exCommandDispatcher.processCommand(cm, register.keyBuffer[0]);
+-      }
+-      macroModeState.isPlaying = false;
+-      return;
+-    }
+-    var keyBuffer = register.keyBuffer;
++    var keys = register.keyBuffer.flatMap(text => text.match(/<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu) || []);
++    var insertModeChanges = register.insertModeChanges.slice();
+     var imc = 0;
+-    macroModeState.isPlaying = true;
+-    macroModeState.replaySearchQueries = register.searchQueries.slice(0);
+-    for (var i = 0; i < keyBuffer.length; i++) {
+-      var text = keyBuffer[i];
+-      var match, key;
+-      var keyRe = /<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu;
+-      while ((match = keyRe.exec(text))) {
+-        // Pull off one command key, which is either a single character
+-        // or a special sequence wrapped in '<' and '>', e.g. '<Space>'.
+-        key = match[0];
+-        vimApi.handleKey(cm, key, 'macro');
++    var searchQueries = register.searchQueries.slice(0);
++    var index = 0;
++    var afterKey = false;
++    run();
++    function run() {
++      var playingBefore = macroModeState.isPlaying;
++      var searchesBefore = macroModeState.replaySearchQueries;
++      macroModeState.isPlaying = true;
++      macroModeState.replaySearchQueries = searchQueries;
++      try {
++      if (registerName == ':') {
++        if (register.keyBuffer[0]) exCommandDispatcher.processCommand(cm, register.keyBuffer[0]);
++        return;
++      }
++      while (index < keys.length || afterKey) {
+         if (cm.state.commandPolicy?.rejected) {
+-          macroModeState.isPlaying = false;
+           return;
+         }
+-        if (vim.insertMode) {
+-          var changes = register.insertModeChanges[imc++].changes;
+-          vimGlobalState.macroModeState.lastInsertModeChanges.changes = changes;
+-          repeatInsertModeChanges(cm, changes, 1);
+-          exitInsertMode(cm);
++        if (afterKey) {
++          afterKey = false;
++          if (vim.insertMode) {
++            var changes = insertModeChanges[imc++]?.changes || [];
++            vimGlobalState.macroModeState.lastInsertModeChanges.changes = changes;
++            repeatInsertModeChanges(cm, changes, 1);
++            exitInsertMode(cm);
++          }
++          if (index == keys.length) break;
+         }
++        vimApi.handleKey(cm, keys[index++], 'macro');
++        afterKey = true;
++        if (deferCommand(cm, run)) return;
++      }
++      } finally {
++        macroModeState.isPlaying = playingBefore;
++        macroModeState.replaySearchQueries = searchesBefore;
+       }
+     }
+-    macroModeState.isPlaying = false;
+   }
+ 
+   /** @arg {MacroModeState} macroModeState @arg {any} key */
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index aa164ef..91ae517 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -445,6 +445,18 @@ export interface SentenceBoundaryProvider {
+     character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
+ }
+ 
++/** Host-owned navigation scoped to the current document and editor. */
++export interface NavigationProvider {
++    recordJump(from: Pos, to: Pos): void
++    resolveMark(name: string): Pos | null
++}
++
++/** Suspend replay at an asynchronous host operation, then resume in order. */
++export interface CommandContinuation {
++    readonly pending: boolean
++    defer(resume: () => void): boolean
++}
++
+ export interface CommandPolicy {
+     allows(command: vimKey, context: string, keys: string): boolean
+     allowsReplay(input: InputStateInterface | void, action: actionCommand | void): boolean
+@@ -467,6 +479,8 @@ export interface CM5EditorInterface {
+         textwidth?: number
+         wordBoundaryProvider?: WordBoundaryProvider
+         sentenceBoundaryProvider?: SentenceBoundaryProvider
++        navigationProvider?: NavigationProvider
++        commandContinuation?: CommandContinuation
+         commandPolicy?: CommandPolicy
+     }
+     marks: Record<string, Marker>
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 420fcd0..1c1aa3b 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -210,6 +210,9 @@ export class CodeMirror {
+     textwidth?: number,
+     lindvimeraTarget?: any,
+     wordBoundaryProvider?: import('@replit/codemirror-vim-core').WordBoundaryProvider,
++    sentenceBoundaryProvider?: import('@replit/codemirror-vim-core').SentenceBoundaryProvider,
++    navigationProvider?: import('@replit/codemirror-vim-core').NavigationProvider,
++    commandContinuation?: import('@replit/codemirror-vim-core').CommandContinuation,
+     commandPolicy?: import('@replit/codemirror-vim-core').CommandPolicy,
+   } = {};
+   marks: Record<string, Marker> = Object.create(null);

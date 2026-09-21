@@ -109,7 +109,7 @@ export class NativeTableSession {
   }
 
   /** Call before dispatching a Vim key and after host focus/navigation changes. */
-  syncTarget(): void {
+  syncTarget(navigating = false): void {
     const next = this.nativeInputView() ?? this.cm.cm6;
     const identity =
       next === this.cm.cm6
@@ -122,7 +122,7 @@ export class NativeTableSession {
     const regenerated = identity !== undefined && identity === this.targetIdentity;
     if (!regenerated) {
       this.options.beforeTargetChange?.();
-      if (!this.cm.state.vim?.insertMode) {
+      if (!navigating && !this.cm.state.vim?.insertMode) {
         // Host focus may already have destroyed the old view. Cancel the old
         // command without applying its Visual coordinates to the new cell.
         const head = next.state.selection.main.head;

@@ -1,0 +1,283 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index c12badd..bea29de 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -1202,17 +1202,21 @@ export function initVim(CM) {
+    */
+   function sendKeyToPrompt(key) {
+     if (!virtualPrompt) throw new Error('No prompt to send key to');
+-    if (key[0] == "<") {
++    if (key.length > 2 && key[0] == "<" && key[key.length - 1] == ">") {
+       var lowerKey = key.toLowerCase().slice(1, -1);
+       var parts = lowerKey.split('-');
+       lowerKey = parts.pop() || '';
+       if (lowerKey == 'lt') key = '<';
+       else if (lowerKey == 'space') key = ' ';
+       else if (lowerKey == 'cr') key = '\n';
+-      else if (vimToCmKeyMap[lowerKey]) {
++      else if (vimToCmKeyMap[lowerKey] || (parts.length && lowerKey.length == 1)) {
+         var value = virtualPrompt.value || "";
+         var event =  {
+-          key: vimToCmKeyMap[lowerKey],
++          key: vimToCmKeyMap[lowerKey] || lowerKey,
++          ctrlKey: parts.indexOf('c') != -1,
++          shiftKey: parts.indexOf('s') != -1,
++          altKey: parts.indexOf('a') != -1,
++          metaKey: parts.indexOf('m') != -1,
+           target: {
+             value: value,
+             selectionEnd: value.length,
+@@ -1222,6 +1226,11 @@ export function initVim(CM) {
+         if (virtualPrompt.onKeyDown) {
+           virtualPrompt.onKeyDown(event, virtualPrompt.value, close);
+         }
++        // There is no browser input default action for a virtual prompt.
++        // Empty Backspace is handled above as prompt cancellation.
++        if (virtualPrompt && lowerKey == 'bs' && value) {
++          virtualPrompt.value = Array.from(value).slice(0, -1).join('');
++        }
+         if (virtualPrompt && virtualPrompt.onKeyUp) {
+           virtualPrompt.onKeyUp(event, virtualPrompt.value, close);
+         }
+@@ -1271,6 +1280,7 @@ export function initVim(CM) {
+         var wasInsert = vim.insertMode;
+         if (virtualPrompt) {
+           sendKeyToPrompt(key);
++          if (cm.state.commandPolicy?.rejected) break;
+           if (deferCommand(cm, run)) return;
+           continue;
+         }
+@@ -1303,7 +1313,7 @@ export function initVim(CM) {
+       } finally {
+       keyToKeyStack = stackBefore;
+       noremap = noremapBefore;
+-      if (!keyToKeyStack.length && virtualPrompt && !cm.state.commandContinuation?.pending) {
++      if (!keyToKeyStack.length && virtualPrompt && !vimGlobalState.macroModeState.isPlaying && !cm.state.commandContinuation?.pending) {
+         var promptOptions = virtualPrompt;
+         virtualPrompt = null;
+         showPrompt(cm, promptOptions);
+@@ -2039,8 +2049,25 @@ export function initVim(CM) {
+      * @arg {import("./types").exCommand | import("./types").keyToExCommand} command
+      */
+     processEx: function(cm, vim, command) {
++      var promptRecorded = false;
++      /** Record text only when a real prompt is completed, not an expanded mapping. */
++      function recordPrompt(input, cancelled) {
++        if (promptRecorded) return;
++        promptRecorded = true;
++        var macro = vimGlobalState.macroModeState;
++        if (!macro.isRecording || macro.isPlaying || keyToKeyStack.length) return;
++        // Reconstruct the complete input even if an automatically supplied range was edited.
++        logKey(macro, '<C-u>');
++        for (var character of input) logKey(macro, character);
++        logKey(macro, cancelled ? '<Esc>' : '<CR>');
++      }
+       /**@arg {string} input*/
+       function onPromptClose(input) {
++        if (cm.state.exCommandProvider) {
++          recordPrompt(input, false);
++          exCommandDispatcher.processCommand(cm, input);
++          return;
++        }
+         // Give the prompt some time to close so that if processCommand shows
+         // an error, the elements don't overlap.
+         vimGlobalState.exCommandHistoryController.pushInput(input);
+@@ -2058,11 +2085,14 @@ export function initVim(CM) {
+         var keyName = vimKeyFromEvent(e), up, offset;
+         if (keyName == '<Esc>' || keyName == '<C-c>' || keyName == '<C-[>' ||
+             (keyName == '<BS>' && input == '')) {
+-          vimGlobalState.exCommandHistoryController.pushInput(input);
+-          vimGlobalState.exCommandHistoryController.reset();
++          if (cm.state.exCommandProvider) recordPrompt(input, true);
++          else {
++            vimGlobalState.exCommandHistoryController.pushInput(input);
++            vimGlobalState.exCommandHistoryController.reset();
++          }
+           CM.e_stop(e);
+           clearInputState(cm);
+-          clearSearchHighlight(cm);
++          if (!cm.state.exCommandProvider) clearSearchHighlight(cm);
+           close();
+           cm.focus();
+         }
+@@ -2086,6 +2116,8 @@ export function initVim(CM) {
+        * @arg {any} query
+        */
+       function onPromptKeyUp(e, query) {
++        // Preview parsing must not modify the previous search or registers.
++        if (cm.state.exCommandProvider) return;
+         var inputStream = new CM.StringStream(query);
+         var params = /**@type{import("./types").exCommandArgs}*/({});
+         try {
+@@ -2110,6 +2142,11 @@ export function initVim(CM) {
+         /**@type{import("./types").PromptOptions} */
+         var promptOptions = {
+           onClose: onPromptClose,
++          onCancel: function(input) {
++            if (!cm.state.exCommandProvider) return;
++            recordPrompt(input, true);
++            if (cm.state.vim) clearInputState(cm);
++          },
+           onKeyDown: onPromptKeyDown,
+           onKeyUp: onPromptKeyUp,
+           prefix: ':',
+@@ -5533,15 +5570,22 @@ export function initVim(CM) {
+    * @arg {import("./types").PromptOptions} options 
+    */
+   function showPrompt(cm, options) {
+-    if (keyToKeyStack.length) {
++    if (keyToKeyStack.length || vimGlobalState.macroModeState.isPlaying) {
+       if (!options.value) options.value = '';
+       virtualPrompt = options;
+       return;
+     }
+     var template = makePrompt(options.prefix, options.desc);
+     if (cm.openDialog) {
+-      cm.openDialog(template, options.onClose, {
++      var submitted = false;
++      cm.openDialog(template, function(input) {
++        submitted = true;
++        options.onClose?.(input);
++      }, {
+         onKeyDown: options.onKeyDown, onKeyUp: options.onKeyUp,
++        onClose: function() {
++          if (!submitted) options.onCancel?.(template.querySelector('input')?.value || '');
++        },
+         bottom: true, selectValueOnOpen: false, value: options.value
+       });
+     }
+@@ -5835,6 +5879,52 @@ export function initVim(CM) {
+      * @arg {{ callback: () => void; } | undefined} [opt_params]
+      */
+     processCommand(cm, input, opt_params) {
++      var provider = cm.state.exCommandProvider;
++      if (provider) {
++        var policy = cm.state.commandPolicy;
++        if (policy && !keyToKeyStack.length && !vimGlobalState.macroModeState.isPlaying) policy.rejected = false;
++        if (!input.trim()) { clearInputState(cm); return; }
++        var completed = false;
++        /** @type {import("./types").ExCommandContext} */
++        var context = {
++          getSearch: function() { return vimGlobalState.query; },
++          setSearch: function(query) {
++            var search = new RegExp(query.source, query.flags.replace(/[gy]/g, ''));
++            getSearchState(cm).setQuery(search);
++            getSearchState(cm).setReversed(false);
++            vimGlobalState.registerController.getRegister('/').setText(search.source);
++            highlightSearchMatches(cm, search);
++          },
++          clearSearch: function() { clearSearchHighlight(cm); },
++          done: function() {
++            if (completed) return;
++            completed = true;
++            if (cm.state.vim) {
++              cm.state.vim.exMode = false;
++              clearInputState(cm);
++            }
++            opt_params?.callback();
++          }
++        };
++        try {
++          var parsed = provider.parse(input, context);
++          if (policy && !policy.allowsEx?.(parsed)) { rejectCommand(cm, ':' + input); return; }
++          cm.operation(function() {
++            if (cm.curOp) cm.curOp.isVimOp = true;
++            vimGlobalState.registerController.getRegister(':').setText(input);
++            vimGlobalState.exCommandHistoryController.pushInput(input);
++            vimGlobalState.exCommandHistoryController.reset();
++            if (cm.state.vim.visualMode) exitVisualMode(cm);
++            cm.state.vim.exMode = true;
++            provider.execute(parsed, context);
++          });
++        } catch (error) {
++          if (policy) policy.rejected = true;
++          context.done();
++          provider.onError(error);
++        }
++        return;
++      }
+       if (cm.state.commandPolicy) { rejectCommand(cm, ':' + input); return; }
+       var that = this;
+       cm.operation(function () {
+@@ -7023,13 +7113,20 @@ export function initVim(CM) {
+           }
+           if (index == keys.length) break;
+         }
+-        vimApi.handleKey(cm, keys[index++], 'macro');
++        var key = keys[index++];
++        if (virtualPrompt) sendKeyToPrompt(key);
++        else vimApi.handleKey(cm, key, 'macro');
+         afterKey = true;
+         if (deferCommand(cm, run)) return;
+       }
+       } finally {
+         macroModeState.isPlaying = playingBefore;
+         macroModeState.replaySearchQueries = searchesBefore;
++        if (!macroModeState.isPlaying && !keyToKeyStack.length && virtualPrompt && !cm.state.commandContinuation?.pending) {
++          var promptOptions = virtualPrompt;
++          virtualPrompt = null;
++          showPrompt(cm, promptOptions);
++        }
+       }
+     }
+   }
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index 91ae517..ba7429d 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -411,6 +411,7 @@ export type ExParams = {
+ 
+ export type PromptOptions = {
+     onClose?: Function; 
++    onCancel?: (input: string) => void;
+     prefix: string|HTMLElement;
+     desc?: string|HTMLElement; 
+     onKeyUp?: Function; 
+@@ -457,9 +458,27 @@ export interface CommandContinuation {
+     defer(resume: () => void): boolean
+ }
+ 
++/** A host can validate and execute its finite Ex vocabulary before editor mutation. */
++export interface ParsedExCommand {
++    input: string
++    name: string
++}
++export interface ExCommandContext {
++    getSearch(): RegExp | undefined
++    setSearch(query: RegExp): void
++    clearSearch(): void
++    done(): void
++}
++export interface ExCommandProvider {
++    parse(input: string, context: ExCommandContext): ParsedExCommand
++    execute(command: ParsedExCommand, context: ExCommandContext): void
++    onError(error: unknown): void
++}
++
+ export interface CommandPolicy {
+     allows(command: vimKey, context: string, keys: string): boolean
+     allowsReplay(input: InputStateInterface | void, action: actionCommand | void): boolean
++    allowsEx?(command: ParsedExCommand): boolean
+     onRejected(keys: string): void
+     rejected?: boolean
+ }
+@@ -481,6 +500,7 @@ export interface CM5EditorInterface {
+         sentenceBoundaryProvider?: SentenceBoundaryProvider
+         navigationProvider?: NavigationProvider
+         commandContinuation?: CommandContinuation
++        exCommandProvider?: ExCommandProvider
+         commandPolicy?: CommandPolicy
+     }
+     marks: Record<string, Marker>
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 1c1aa3b..5d98a05 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -213,6 +213,7 @@ export class CodeMirror {
+     sentenceBoundaryProvider?: import('@replit/codemirror-vim-core').SentenceBoundaryProvider,
+     navigationProvider?: import('@replit/codemirror-vim-core').NavigationProvider,
+     commandContinuation?: import('@replit/codemirror-vim-core').CommandContinuation,
++    exCommandProvider?: import('@replit/codemirror-vim-core').ExCommandProvider,
+     commandPolicy?: import('@replit/codemirror-vim-core').CommandPolicy,
+   } = {};
+   marks: Record<string, Marker> = Object.create(null);

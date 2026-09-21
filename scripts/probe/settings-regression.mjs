@@ -102,11 +102,11 @@ export async function runSettingsRegression(page) {
       const dropdown = row("日本語の分割モード").locator('select:not([aria-hidden="true"])');
       await dropdown.selectOption("decompose");
       await persisted("linderaMode", "decompose");
-      await row("日本語の単語操作").locator(".checkbox-container").click();
+      await row("日本語の単語・文操作").locator(".checkbox-container").click();
       await persisted("japanese", false);
       assert.equal(await dropdown.isDisabled(), true);
       assert.equal((await state()).linderaMode, "decompose");
-      await row("日本語の単語操作").locator(".checkbox-container").click();
+      await row("日本語の単語・文操作").locator(".checkbox-container").click();
       await persisted("japanese", true);
       assert.equal(await dropdown.isDisabled(), false);
       assert.equal(await dropdown.inputValue(), "decompose");

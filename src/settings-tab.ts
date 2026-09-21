@@ -11,7 +11,7 @@ interface SettingsHost extends Plugin {
 
 const toggles = {
   enabled: "Lindvimeraを有効にする",
-  japanese: "日本語の単語操作",
+  japanese: "日本語の単語・文操作",
   markdownMotions: "見出し・リスト移動",
   textObjects: "Markdownテキストオブジェクト",
   surround: "Surround",

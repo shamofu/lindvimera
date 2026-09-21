@@ -308,6 +308,8 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
       await setup();
       const before = (await snapshot()).text;
       await page.keyboard.type(":Qd~");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Escape");
       assert.equal(
         (await snapshot()).text,
         before,

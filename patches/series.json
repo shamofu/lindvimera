@@ -48,6 +48,31 @@
         "test/input/operation-coverage.test.ts",
         "test/runtime/routing.test.ts"
       ]
+    },
+    {
+      "file": "0008-text-boundaries.patch",
+      "purpose": "Shared per-editor sentence boundaries, whitespace paragraph objects and linewise line motions",
+      "tests": ["test/word/sentence.test.ts", "test/input/operation-coverage.test.ts"]
+    },
+    {
+      "file": "0009-search-selection.patch",
+      "purpose": "Counted search-result selection includes the current match and preserves direction and grapheme endpoints",
+      "tests": ["test/input/operation-coverage.test.ts"]
+    },
+    {
+      "file": "0010-command-state.patch",
+      "purpose": "Distinguish doubled case operators from conflicting case operations sharing one implementation",
+      "tests": ["test/input/operation-coverage.test.ts"]
+    },
+    {
+      "file": "0011-navigation-replay.patch",
+      "purpose": "Host-scoped navigation positions and ordered asynchronous macro and mapping continuations",
+      "tests": ["test/navigation/session.test.ts", "test/runtime/pending.test.ts"]
+    },
+    {
+      "file": "0012-ex-policy.patch",
+      "purpose": "Validate parsed host Ex commands before mutation and share typed, mapped and recorded prompt replay",
+      "tests": ["test/ex/parser.test.ts", "test/ex/session.test.ts", "test/ex/replay.test.ts"]
     }
   ]
 }

@@ -1,0 +1,84 @@
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -142,9 +142,9 @@
+     { keys: "g0", type: "motion", motion: "moveToStartOfDisplayLine" },
+     { keys: '0', type: 'motion', motion: 'moveToStartOfLine' },
+     { keys: '^', type: 'motion', motion: 'moveToFirstNonWhiteSpaceCharacter' },
+-    { keys: '+', type: 'motion', motion: 'moveByLines', motionArgs: { forward: true, toFirstChar:true }},
+-    { keys: '-', type: 'motion', motion: 'moveByLines', motionArgs: { forward: false, toFirstChar:true }},
+-    { keys: '_', type: 'motion', motion: 'moveByLines', motionArgs: { forward: true, toFirstChar:true, repeatOffset:-1 }},
++    { keys: '+', type: 'motion', motion: 'moveByLines', motionArgs: { forward: true, toFirstChar:true, linewise: true }},
++    { keys: '-', type: 'motion', motion: 'moveByLines', motionArgs: { forward: false, toFirstChar:true, linewise: true }},
++    { keys: '_', type: 'motion', motion: 'moveByLines', motionArgs: { forward: true, toFirstChar:true, repeatOffset:-1, linewise: true }},
+     { keys: '$', type: 'motion', motion: 'moveToEol', motionArgs: { inclusive: true }},
+     { keys: '%', type: 'motion', motion: 'moveToMatchedSymbol', motionArgs: { inclusive: true, toJumplist: true }},
+     { keys: 'f<character>', type: 'motion', motion: 'moveToCharacter', motionArgs: { forward: true , inclusive: true }},
+@@ -2585,6 +2585,9 @@
+       return findParagraph(cm, head, motionArgs.repeat, dir).start;
+     },
+     moveBySentence: function(cm, head, motionArgs) {
++      if (cm.state.sentenceBoundaryProvider) {
++        return cm.state.sentenceBoundaryProvider.move(cm, head, motionArgs);
++      }
+       var dir = motionArgs.forward ? 1 : -1;
+       return findSentence(cm, head, motionArgs.repeat, dir);
+     },
+@@ -2793,6 +2796,23 @@
+       } else if (character === 't') {
+         tmp = expandTagUnderCursor(cm, head, inclusive);
+       } else if (character === 's') {
++        if (cm.state.sentenceBoundaryProvider) {
++          var sentenceProvider = cm.state.sentenceBoundaryProvider;
++          var sentenceSelection = vim.visualMode ? vim.sel : undefined;
++          var sentence = sentenceProvider.expand(cm, head, {
++            inclusive, repeat: motionArgs.repeat || 1, visualSelection: sentenceSelection
++          });
++          if (!sentence) return null;
++          if (!sentenceSelection) return [sentence.start, sentence.end];
++          vim.visualLine = vim.visualBlock = false;
++          var sentenceEnd = sentence.end.ch > 0
++            ? sentenceProvider.character(cm, sentence.end, -1)
++            : sentence.end.line > cm.firstLine()
++              ? new Pos(sentence.end.line - 1, lineLength(cm, sentence.end.line - 1))
++              : sentence.end;
++          return cursorIsBefore(sentenceSelection.head, sentenceSelection.anchor)
++            ? [sentenceEnd, sentence.start] : [sentence.start, sentenceEnd];
++        }
+         // account for cursor on end of sentence symbol
+         var content = cm.getLine(head.line);
+         if (head.ch > 0 && isEndOfSentenceSymbol(content[head.ch])) {
+@@ -4691,7 +4711,9 @@
+     var max = cm.lastLine();
+     var start, end, i = line;
+     /** @arg {number} i */
+-    function isEmpty(i) { return !cm.getLine(i); }
++    // Paragraph motions stop at truly empty lines; paragraph objects also
++    // treat whitespace-only lines as boundaries, as Vim does.
++    function isEmpty(i) { return dir ? !cm.getLine(i) : !/\S/.test(cm.getLine(i) || ''); }
+     /** @arg {number} i @arg {number} dir @arg {boolean} [any] */
+     function isBoundary(i, dir, any) {
+       if (any) { return isEmpty(i) != isEmpty(i + dir); }
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -438,6 +438,13 @@
+     character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
+ }
+ 
++/** Half-open sentence objects share the same boundaries as sentence motions. */
++export interface SentenceBoundaryProvider {
++    move(cm: CM5EditorInterface, cursor: Pos, args: MotionArgs): Pos
++    expand(cm: CM5EditorInterface, cursor: Pos, options: {inclusive?: boolean, repeat?: number, visualSelection?: {anchor: Pos, head: Pos}}): {start: Pos, end: Pos} | null
++    character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
++}
++
+ export interface CommandPolicy {
+     allows(command: vimKey, context: string, keys: string): boolean
+     allowsReplay(input: InputStateInterface | void, action: actionCommand | void): boolean
+@@ -459,6 +466,7 @@
+         overwrite?: boolean
+         textwidth?: number
+         wordBoundaryProvider?: WordBoundaryProvider
++        sentenceBoundaryProvider?: SentenceBoundaryProvider
+         commandPolicy?: CommandPolicy
+     }
+     marks: Record<string, Marker>

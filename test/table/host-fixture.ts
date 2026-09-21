@@ -1,5 +1,5 @@
 import { EditorSelection, EditorState, Transaction } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { Decoration, EditorView, keymap, WidgetType } from "@codemirror/view";
 import { defaultKeymap, history } from "@codemirror/commands";
 import { getCM, Vim } from "@replit/codemirror-vim";
 import { editorSession, lindvimeraEditor } from "../../src/runtime/editor";
@@ -21,13 +21,19 @@ interface Input {
   table: HostTable;
   cm: EditorView;
 }
-interface HostTable {
+interface HostTable extends WidgetType {
   start: number;
   end: number;
   rows: Cell[][];
   editor: NativeHostFixture;
   getCellAt(row: number, column: number): Cell | null;
   deselectCells(): void;
+}
+
+class FixtureTableWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    return document.createElement("span");
+  }
 }
 
 /** Only Obsidian's native boundary is simulated; production runtime, Vim and history run. */
@@ -38,6 +44,9 @@ export class NativeHostFixture {
   readonly table: HostTable;
   readonly settings = { ...DEFAULT_SETTINGS, japanese: false };
   readonly nativeKeys: string[] = [];
+  onError = (message: string): void => {
+    throw new Error(message);
+  };
   tableCell: Input | null = null;
   private syncing = false;
 
@@ -46,14 +55,14 @@ export class NativeHostFixture {
     private prefix = "",
     private suffix = "",
   ) {
-    this.table = {
+    this.table = Object.assign(new FixtureTableWidget(), {
       start: prefix.length,
       end: prefix.length + source.length,
       rows: [],
       editor: this,
-      getCellAt: (row, column) => this.table.rows[row]?.[column] ?? null,
+      getCellAt: (row: number, column: number) => this.table.rows[row]?.[column] ?? null,
       deselectCells() {},
-    };
+    });
     this.rebuild(prefix + source + suffix);
     this.cm = new EditorView({
       parent: document.body,
@@ -61,13 +70,14 @@ export class NativeHostFixture {
         doc: prefix + source + suffix,
         extensions: [
           history(),
+          EditorView.decorations.of(() =>
+            Decoration.set(Decoration.widget({ widget: this.table }).range(this.table.start)),
+          ),
           EditorState.allowMultipleSelections.of(true),
           lindvimeraEditor({
             settings: () => this.settings,
             owner: () => this,
-            error: (message) => {
-              throw new Error(message);
-            },
+            error: (message) => this.onError(message),
           }),
           keymap.of(defaultKeymap),
           EditorView.updateListener.of((update) => {

@@ -65,6 +65,21 @@ function press(view: EditorView, sequence: string): void {
   }
 }
 
+function search(view: EditorView, query: string, direction = "/"): void {
+  press(view, direction);
+  const input = view.dom.querySelector<HTMLInputElement>(".cm-vim-panel input");
+  expect(input).not.toBeNull();
+  input!.value = query;
+  input!.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
 function create(target: "body" | "cell", text: string, at = 0) {
   const nativeEscape = vi.fn(() => true);
   let settings: LindvimeraSettings = { ...DEFAULT_SETTINGS, japanese: false };
@@ -101,6 +116,12 @@ function create(target: "body" | "cell", text: string, at = 0) {
   }
   view.focus();
   const cm = getCM(parent)!;
+  // jsdom has no line geometry. These logical-line scenarios contain no folded
+  // ranges; screen-line and folding behavior is exercised by the host E2E suite.
+  vi.spyOn(cm, "findPosV").mockImplementation((start, amount) => ({
+    line: Math.max(cm.firstLine(), Math.min(cm.lastLine(), start.line + amount)),
+    ch: start.ch,
+  }));
   cm.setCursor(cm.posFromIndex(at));
   return {
     cm,
@@ -155,6 +176,18 @@ const motions: MotionCase[] = [
   { key: "G", text: "abc\ndef\nghi", at: 0, end: 8 },
   { key: "2gg", text: "abc\ndef\nghi", at: 0, end: 4 },
   { key: "2G", text: "abc\ndef\nghi", at: 0, end: 4 },
+  { key: "{", text: "one\n\ntwo\n\nthree", at: 12, end: 9 },
+  { key: "}", text: "one\n\ntwo\n\nthree", at: 0, end: 4 },
+  { key: "2}", text: "one\n\ntwo\n\nthree", at: 0, end: 9 },
+  { key: "2{", text: "one\n\ntwo\n\nthree", at: 12, end: 4 },
+  { key: "}", text: "one\n  \ntwo\n\nthree", at: 0, end: 11 },
+  { key: "(", text: "One. Two. Three.", at: 5, end: 0 },
+  { key: ")", text: "One. Two. Three.", at: 0, end: 5 },
+  { key: "2)", text: "One. Two. Three.", at: 0, end: 10 },
+  { key: "+", text: "x\n  one\n  two\n  three", at: 5, end: 10 },
+  { key: "-", text: "x\n  one\n  two\n  three", at: 11, end: 4 },
+  { key: "_", text: "x\n  one\n  two\n  three", at: 6, end: 4 },
+  { key: "2_", text: "x\n  one\n  two\n  three", at: 6, end: 10 },
   { key: "fx", text: "a x b x c", at: 0, end: 2 },
   { key: "Fx", text: "a x b x c", at: 8, end: 6 },
   { key: "tx", text: "a x b x c", at: 0, end: 1 },
@@ -169,6 +202,8 @@ const motions: MotionCase[] = [
   { key: "99j", text: "abc\ndef", at: 1, end: 5 },
   { key: "*", text: "one two one", at: 0, end: 8 },
   { key: "#", text: "one two one", at: 8, end: 0 },
+  { key: "g*", text: "one stone one", at: 0, end: 6 },
+  { key: "g#", text: "one stone one", at: 10, end: 6 },
   { key: "*n", text: "one two one", at: 0, end: 0 },
   { key: "*N", text: "one two one", at: 0, end: 0 },
   { key: "]h", text: "# one\ntext\n# two", at: 2, end: 13 },
@@ -223,6 +258,60 @@ const edits: EditCase[] = [
   { key: "xp", text: "abc", result: "bac" },
   { key: "xP", text: "abc", result: "abc" },
   { key: "J", text: "one\ntwo", result: "one two" },
+  { key: "gJ", text: "one\n  two", result: "one  two" },
+  { key: "3gJ", text: "one\ntwo\nthree", result: "onetwothree" },
+  { key: "~", text: "Abc", result: "abc" },
+  { key: "3~", text: "AbC def", result: "aBc def" },
+  { key: "guw", text: "ONE TWO", result: "one TWO" },
+  { key: "gUw", text: "one two", result: "ONE two" },
+  { key: "g~w", text: "OnE two", result: "oNe two" },
+  { key: "guu", text: "ONE TWO\nTHREE", result: "one two\nTHREE" },
+  { key: "gUU", text: "one two\nthree", result: "ONE TWO\nthree" },
+  { key: "g~~", text: "OnE TwO\nThree", result: "oNe tWo\nThree" },
+  { key: "gugu", text: "ONE TWO\nTHREE", result: "one two\nTHREE" },
+  { key: "gUgU", text: "one two\nthree", result: "ONE TWO\nthree" },
+  { key: "g~g~", text: "OnE TwO\nThree", result: "oNe tWo\nThree" },
+  { key: "2gUw", text: "one two three", result: "ONE TWO three" },
+  { key: "viwu", text: "ONE TWO", result: "one TWO" },
+  { key: "viwU", text: "one two", result: "ONE two" },
+  { key: "viw~", text: "OnE two", result: "oNe two" },
+  { key: "VjU", text: "one\ntwo\nthree", result: "ONE\nTWO\nthree" },
+  { key: "<C-v>jlu", text: "ABCD\nEFGH", result: "abCD\nefGH" },
+  { key: "gUww.", text: "one two three", result: "ONE TWO three" },
+  { key: "g~ww.", text: "OnE TwO three", result: "oNe tWo three" },
+  { key: "qagUwwq@a", text: "one two three", result: "ONE TWO three" },
+  { key: "d+", text: "one\ntwo\nthree", result: "three", register: "one\ntwo\n" },
+  { key: "d_", text: "one\ntwo", result: "two", register: "one\n" },
+  { key: "d-", text: "one\ntwo\nthree", at: 4, result: "three", register: "one\ntwo\n" },
+  { key: "2d_", text: "one\ntwo\nthree", result: "three", register: "one\ntwo\n" },
+  { key: "d)", text: "One. Two. Three.", result: "Two. Three.", register: "One. " },
+  { key: "dip", text: "one\ntwo\n\nthree", result: "\nthree", register: "one\ntwo\n" },
+  { key: "dap", text: "one\ntwo\n\nthree", result: "three", register: "one\ntwo\n\n" },
+  { key: "dip", text: "pre\n\none\n  \ntwo", at: 5, result: "pre\n\n  \ntwo", register: "one\n" },
+  { key: "dis", text: "Pre. One. Two.", at: 6, result: "Pre.  Two.", register: "One." },
+  { key: "das", text: "One. Two.", at: 1, result: "Two.", register: "One. " },
+  {
+    key: '"ayis',
+    text: "One. Two.",
+    at: 1,
+    result: "One. Two.",
+    register: "One.",
+    registerName: "a",
+    history: false,
+  },
+  { key: "*ggwdgn", text: "pre one two one", at: 4, result: "pre  two one", register: "one" },
+  { key: "*ggwdgN", text: "pre one two one", at: 4, result: "pre  two one", register: "one" },
+  { key: '"adg*', text: "one stone one", result: "one one", register: "one st", registerName: "a" },
+  {
+    key: '"acg#X<Esc>',
+    text: "one stone one",
+    at: 10,
+    result: "one stXone",
+    register: "one ",
+    registerName: "a",
+  },
+  { key: "*ggcgnX<Esc>.", text: "one two one three one", result: "X two X three one" },
+  { key: "*ggqacgnX<Esc>q@a", text: "one two one three one", result: "X two X three one" },
   { key: ">>", text: "pre\none\npost", at: 4, result: "pre\n  one\npost" },
   { key: "<<", text: "pre\n  one\npost", at: 6, result: "pre\none\npost" },
   { key: "==", text: "pre\n  one\npost", at: 6, result: "pre\none\npost" },
@@ -343,6 +432,24 @@ it("accounts for every supported command and extension in executable coverage", 
     p: "xp",
     P: "xP",
     J: "J",
+    gJ: "gJ",
+    "~": "~",
+    gu: "guw",
+    gU: "gUw",
+    "g~": "g~w",
+    guu: "guu",
+    gUU: "gUU",
+    "g~~": "g~~",
+    gugu: "gugu",
+    gUgU: "gUgU",
+    "g~g~": "g~g~",
+    U: "viwU",
+    ip: "dip",
+    ap: "dap",
+    is: "dis",
+    as: "das",
+    gn: "*ggwdgn",
+    gN: "*ggwdgN",
     ">": ">>",
     "<": "<<",
     "=": "==",
@@ -386,6 +493,22 @@ it("accounts for every supported command and extension in executable coverage", 
     for (const command of commands) evidence.add(command);
   }
   const external = [
+    {
+      commands: [":"],
+      file: "../ex/replay.test.ts",
+      scenario: 'it("records a completed physical Ex prompt and replays the command once"',
+    },
+    {
+      commands: ["m<register>", "'<register>", "`<register>"],
+      file: "../navigation/session.test.ts",
+      scenario:
+        'it("sets local marks and restores exact or first nonblank positions without history"',
+    },
+    {
+      commands: ["<C-o>", "<C-i>"],
+      file: "../probe/host-regression.ts",
+      scenario: 'await check("host-counted-local-jumps"',
+    },
     {
       commands: [
         "gj",
@@ -437,6 +560,21 @@ it("accounts for every supported command and extension in executable coverage", 
 });
 
 describe.each(["body", "cell"] as const)("supported DOM operations in %s", (target) => {
+  it.each(["gugU", "gUg~", "g~gu", "gUgu", "g~gU", "gug~"])(
+    "cancels mismatched case operators in %s without editing",
+    (sequence) => {
+      const editor = create(target, "OnE TwO\nthree");
+      editor.keys(sequence);
+      expect(editor.cm.getValue()).toBe("OnE TwO\nthree");
+      expect(editor.cm.state.vim?.inputState.operator).toBeFalsy();
+      expect(editor.cm.state.vim?.visualMode).toBe(false);
+      expect(undoDepth(editor.parent.state)).toBe(0);
+      editor.keys("w");
+      expect(editor.cm.getCursor()).toMatchObject({ line: 0, ch: 4 });
+      editor.unchangedNeighbours();
+    },
+  );
+
   it.each(motions)("motion $key", ({ key, text, at, end }) => {
     const editor = create(target, text, at);
     editor.keys(key);
@@ -448,7 +586,7 @@ describe.each(["body", "cell"] as const)("supported DOM operations in %s", (targ
     editor.unchangedNeighbours();
   });
 
-  it.each(motions.filter(({ key }) => !["<CR>", "*", "#", "*n", "*N"].includes(key)))(
+  it.each(motions.filter(({ key }) => !["<CR>", "*", "#", "g*", "g#", "*n", "*N"].includes(key)))(
     "Visual motion $key",
     ({ key, text, at, end }) => {
       const editor = create(target, text, at);
@@ -492,6 +630,109 @@ describe.each(["body", "cell"] as const)("supported DOM operations in %s", (targ
       }
     },
   );
+
+  it.each([
+    { key: "gn", at: 1, selectedAt: 0 },
+    { key: "gn", at: 4, selectedAt: 8 },
+    { key: "gN", at: 9, selectedAt: 8 },
+    { key: "gN", at: 12, selectedAt: 8 },
+    { key: "2gn", at: 0, selectedAt: 8 },
+    { key: "2gN", at: 18, selectedAt: 8 },
+    { key: "gn", at: 4, selectedAt: 8, search: "#" },
+    { key: "gN", at: 12, selectedAt: 8, search: "#" },
+  ])("selects a complete search match with $key from $at", ({ key, at, selectedAt, search }) => {
+    const text = "one two one three one";
+    const editor = create(target, text);
+    editor.keys(`${search ?? "*"}gg`);
+    editor.cm.setCursor(editor.cm.posFromIndex(at));
+    editor.keys(key);
+    expect(editor.cm.getValue()).toBe(text);
+    expect(editor.cm.getSelection()).toBe("one");
+    expect(editor.cm.indexFromPos(editor.cm.getCursor("start"))).toBe(selectedAt);
+    expect(editor.cm.state.vim?.visualMode).toBe(true);
+    expect(undoDepth(editor.parent.state)).toBe(0);
+    editor.keys("<Esc>");
+    editor.unchangedNeighbours();
+  });
+
+  it.each([
+    { key: "gngn", at: 0, selected: "one two one" },
+    { key: "gNgN", at: 8, selected: "one two one" },
+    { key: "vgn", at: 1, selected: "ne" },
+    { key: "vgN", at: 9, selected: "on" },
+    { key: "vgn", at: 2, selected: "e two one" },
+    { key: "vgN", at: 8, selected: "one two o" },
+  ])("extends Visual search selections with $key from $at", ({ key, at, selected }) => {
+    const editor = create(target, "one two one three one");
+    editor.keys("*gg");
+    editor.cm.setCursor(editor.cm.posFromIndex(at));
+    editor.keys(key);
+    expect(editor.cm.getSelection()).toBe(selected);
+    expect(editor.cm.state.vim?.visualMode).toBe(true);
+    expect(undoDepth(editor.parent.state)).toBe(0);
+    editor.unchangedNeighbours();
+  });
+
+  it.each([
+    { text: "one\ntwo", query: "^", key: "gn", selected: "o", result: "ne\ntwo" },
+    { text: "one\ntwo", query: "^", key: "2gn", selected: "t", result: "one\nwo" },
+    { text: "pre\n😀é end", query: "😀é", key: "gn", selected: "😀é", result: "pre\n end" },
+    {
+      text: "pre\none\ntwo\npost",
+      query: "one\\ntwo",
+      key: "gn",
+      selected: "one\ntwo",
+      result: "pre\n\npost",
+    },
+  ])(
+    "selects and deletes the complete $query search range with $key",
+    ({ text, query, key, selected, result }) => {
+      const editor = create(target, text);
+      search(editor.view, query);
+      editor.keys(`gg${key}`);
+      expect(editor.cm.getSelection()).toBe(selected);
+      editor.keys('"ad');
+      expect(editor.cm.getValue()).toBe(result);
+      expect(Vim.getRegisterController().getRegister("a").toString()).toBe(selected);
+      editor.keys("u");
+      expect(editor.cm.getValue()).toBe(text);
+      editor.keys("<C-r>");
+      expect(editor.cm.getValue()).toBe(result);
+      editor.unchangedNeighbours();
+    },
+  );
+
+  it.each(["gn", "gN"])("leaves the buffer and mode unchanged for %s without a query", (key) => {
+    const editor = create(target, "one two");
+    editor.keys(key);
+    expect(editor.cm.getValue()).toBe("one two");
+    expect(editor.cm.state.vim?.visualMode).toBe(false);
+    expect(undoDepth(editor.parent.state)).toBe(0);
+  });
+
+  it("maps paragraph objects and case operators in their respective input modes", () => {
+    const editor = create(target, "one\ntwo\n\nthree");
+    editor.settings.keyBindings = [
+      { mode: "normal", from: "Q", to: "gUip" },
+      { mode: "operatorPending", from: "Q", to: "ap" },
+      { mode: "visual", from: "Q", to: "u" },
+    ];
+    for (const binding of editor.settings.keyBindings)
+      Vim.map(binding.from, binding.to, binding.mode);
+    try {
+      editorSession(editor.parent)!.configure();
+      editor.keys("Q");
+      expect(editor.cm.getValue()).toBe("ONE\nTWO\n\nthree");
+      editor.keys("vipQ");
+      expect(editor.cm.getValue()).toBe("one\ntwo\n\nthree");
+      editor.keys('"adQ');
+      expect(editor.cm.getValue()).toBe("three");
+      expect(Vim.getRegisterController().getRegister("a").toString()).toBe("one\ntwo\n\n");
+      editor.unchangedNeighbours();
+    } finally {
+      for (const binding of editor.settings.keyBindings) Vim.unmap(binding.from, binding.mode);
+    }
+  });
 
   it.each(["<Esc>", "<C-[>"])("clean defaults cancel Insert once with %s", (cancel) => {
     const editor = create(target, "");

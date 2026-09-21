@@ -1,5 +1,5 @@
 import { Transaction } from "@codemirror/state";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { decodeCell, parseMarkdownTable, TableSourceError } from "./source";
 import type { MarkdownTable, TableCell } from "./source";
 import type { CellPosition } from "./selection";
@@ -105,6 +105,168 @@ export function nativeCellIdentity(owner: unknown, parent: EditorView): string |
   const input = owner.tableCell;
   if (cellEditor(input) && input.table.editor === owner)
     return `${input.table.start}:${input.cell.row}:${input.cell.col}`;
+}
+
+/** Unlike snapshot(), this also works during a cell's update before parent serialization. */
+export function nativeCellCoordinates(
+  owner: unknown,
+  parent: EditorView,
+):
+  | { tableFrom: number; tableTo: number; from: number; to: number; row: number; column: number }
+  | undefined {
+  if (!editMode(owner) || owner.cm !== parent || !cellEditor(owner.tableCell)) return;
+  const { table, cell } = owner.tableCell;
+  if (table.editor !== owner) return;
+  const range = cell.getAbsoluteOffsets();
+  return {
+    tableFrom: table.start,
+    tableTo: table.end,
+    from: range.start,
+    to: range.end,
+    row: cell.row,
+    column: cell.col,
+  };
+}
+
+/** Resolve a known source table even when no cell is currently open. */
+export function resolveNativeTableAt(
+  owner: unknown,
+  parent: EditorView,
+  from: number,
+  to: number,
+): NativeTableResolution {
+  if (!editMode(owner) || owner.cm !== parent)
+    return { supported: false, reason: "Native table editor API is unavailable." };
+  const candidates: unknown[] = [owner.tableCell?.table];
+  for (const provider of parent.state.facet(EditorView.decorations)) {
+    const decorations = typeof provider === "function" ? provider(parent) : provider;
+    decorations.between(from, to, (_from, _to, decoration) => {
+      const spec: unknown = decoration.spec;
+      if (record(spec)) candidates.push(spec.widget);
+    });
+  }
+  for (const candidate of candidates) {
+    if (
+      !record(candidate) ||
+      candidate.editor !== owner ||
+      candidate.start !== from ||
+      candidate.end !== to ||
+      !Array.isArray(candidate.rows) ||
+      typeof candidate.getCellAt !== "function" ||
+      typeof candidate.deselectCells !== "function"
+    )
+      continue;
+    try {
+      const context = new NativeTableContext(owner, candidate as unknown as NativeTable);
+      context.snapshot();
+      return { supported: true, context };
+    } catch {
+      // Offscreen widgets may not have materialized their rows yet.
+    }
+  }
+  return { supported: false, reason: "The marked table is not available in Live Preview." };
+}
+
+/** Closing a native surface is required before restoring a source/body cursor. */
+export function focusNativeBody(owner: unknown, parent: EditorView, offset: number): void {
+  if (editMode(owner) && owner.cm === parent && owner.tableCell) {
+    owner.tableCell.table.deselectCells();
+    owner.destroyTableCell();
+  }
+  parent.dispatch({
+    selection: { anchor: Math.max(0, Math.min(offset, parent.state.doc.length)) },
+    annotations: Transaction.addToHistory.of(false),
+    scrollIntoView: true,
+  });
+  parent.focus();
+}
+
+export interface NativeRestorePosition {
+  tableFrom: number;
+  tableTo: number;
+  from: number;
+  to: number;
+  offset: number;
+  linewise: boolean;
+}
+
+function renderStep(parent: EditorView): Promise<void> {
+  return new Promise((resolve) => {
+    const win = parent.dom.ownerDocument.defaultView!;
+    const frame = win.requestAnimationFrame(() => {
+      win.clearTimeout(timer);
+      resolve();
+    });
+    const timer = win.setTimeout(() => {
+      win.cancelAnimationFrame(frame);
+      resolve();
+    }, 50);
+  });
+}
+
+/** Rendering, opening and verifying a native target stay behind the host adapter. */
+export async function restoreNativeCell(
+  owner: () => unknown,
+  parent: EditorView,
+  position: () => NativeRestorePosition,
+  check: () => void,
+): Promise<void> {
+  check();
+  let target = position();
+  // A retained, fully materialized table can still be outside the viewport.
+  parent.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
+  let result: NativeTableResolution = {
+    supported: false,
+    reason: "The marked table is not rendered.",
+  };
+  for (let attempt = 0; attempt < 12 && !result.supported; attempt++) {
+    await renderStep(parent);
+    check();
+    target = position();
+    result = resolveNativeTableAt(owner(), parent, target.tableFrom, target.tableTo);
+  }
+  check();
+  if (!result.supported) throw new TableSourceError(result.reason);
+  const table = result.context.snapshot();
+  const cell = table.rows
+    .flat()
+    .find((candidate) => candidate.from === target.from && candidate.to === target.to);
+  if (!cell) throw new TableSourceError("移動先のセルは削除されています。");
+  if (target.offset < 0 || target.offset > cell.map.text.length)
+    throw new TableSourceError("移動先のセル座標は変更されています。");
+  const view = result.context.focus({ row: cell.row, column: cell.column, offset: target.offset });
+  const line = view.state.doc.lineAt(target.offset);
+  const offset = target.linewise
+    ? line.from + (line.text.match(/^\s*/u)?.[0].length ?? 0)
+    : target.offset;
+  if (offset !== target.offset)
+    view.dispatch({
+      selection: { anchor: offset },
+      annotations: Transaction.addToHistory.of(false),
+    });
+  const cellBox = view.dom.getBoundingClientRect();
+  const viewport = parent.scrollDOM.getBoundingClientRect();
+  if (
+    cellBox.top < viewport.top ||
+    cellBox.bottom > viewport.bottom ||
+    cellBox.left < viewport.left ||
+    cellBox.right > viewport.right
+  )
+    view.dom.scrollIntoView({ block: "nearest", inline: "nearest" });
+  await renderStep(parent);
+  check();
+  const active = resolveNativeTable(owner(), parent);
+  if (!active.supported) throw new TableSourceError(active.reason);
+  const current = active.context.position();
+  const input = active.context.cellView;
+  if (
+    !input ||
+    current.row !== cell.row ||
+    current.column !== cell.column ||
+    current.offset !== offset ||
+    input.state.doc.toString() !== cell.map.text
+  )
+    throw new TableSourceError("移動先のセルとカーソル位置を確認できません。");
 }
 
 /**

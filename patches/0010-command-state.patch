@@ -1,0 +1,18 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index b24507a..63ade04 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -1758,6 +1758,13 @@ export function initVim(CM) {
+       var inputState = vim.inputState;
+       if (inputState.operator) {
+         if (inputState.operator == command.operator) {
++          // gu, gU and g~ share an implementation, but are distinct operators.
++          // Only a repeated operation (including guu/gUU/g~~) is linewise.
++          if (command.operator === 'changeCase' &&
++              inputState.operatorArgs?.toLower !== command.operatorArgs?.toLower) {
++            clearInputState(cm);
++            return;
++          }
+           // Typing an operator twice like 'dd' makes the operator operate
+           // linewise
+           inputState.motion = 'expandToLine';

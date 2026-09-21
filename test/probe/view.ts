@@ -18,6 +18,8 @@ import {
 } from "./runtime";
 import { measureEditorPerformance } from "./performance";
 import { runHostRegression } from "./host-regression";
+import { extendedEditingCases } from "./editing-cases";
+import { answerEx, exEditingCases, submitEx } from "./ex-cases";
 
 export const PROBE_VIEW_TYPE = "lindvimera-input-probe";
 export const ACCEPTANCE_REPORT_PATH = "Lindvimera acceptance.json";
@@ -713,6 +715,7 @@ export class ProbeView extends ItemView {
     if (!cm || !this.report.checks["native-table-compatibility"].passed) return;
     const initialEngine = cm;
     const resetFixture = async () => {
+      editorSession(parent)?.pending.cancel();
       cm.state.dialog?.querySelector("input")?.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Escape",
@@ -722,6 +725,7 @@ export class ProbeView extends ItemView {
           cancelable: true,
         }),
       );
+      await Promise.resolve();
       keys(cm, "<Esc>");
       editorSession(parent)?.flush();
       (owner as { destroyTableCell(): void }).destroyTableCell();
@@ -758,6 +762,353 @@ export class ProbeView extends ItemView {
         await new Promise<void>((resolve) => window.setTimeout(resolve, 12));
       }
     };
+    const waitNavigation = async (condition: () => boolean, message: string, awaitIdle = true) => {
+      const deadline = Date.now() + 4000;
+      const complete = () => (!awaitIdle || !editorSession(parent)?.pending.pending) && condition();
+      while (!complete() && Date.now() < deadline)
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 25));
+      requireCheck(complete(), message);
+    };
+    const atCell = (row: number, column: number, offset: number) => {
+      const current = resolveNativeTable(owner);
+      if (!current.supported || !current.context.cellView?.hasFocus) return false;
+      const position = current.context.position();
+      return position.row === row && position.column === column && position.offset === offset;
+    };
+    const hideTable = async () => {
+      await domKeys("[t");
+      const suffix = `\n\n${Array.from({ length: 180 }, (_, index) => `Far paragraph ${index}.`).join("\n\n")}`;
+      const end = parent.state.doc.length;
+      parent.dispatch({
+        changes: { from: end, insert: suffix },
+        selection: { anchor: end + suffix.length },
+        scrollIntoView: true,
+        annotations: [Transaction.userEvent.of("set"), Transaction.addToHistory.of(false)],
+      });
+      parent.focus();
+      await waitNavigation(
+        () => parent.viewport.from > original.to && !editorSession(parent)?.table.nativeInputView(),
+        "The navigation fixture did not place the marked table outside the viewport.",
+      );
+    };
+    const seedExCell = async (text: string) => {
+      await resetFixture();
+      (owner as { destroyTableCell(): void }).destroyTableCell();
+      const cell = model().rows[1][0];
+      parent.dispatch({
+        changes: {
+          from: cell.content.from,
+          to: cell.content.to,
+          insert: text.replaceAll("\n", "<br>"),
+        },
+        selection: { anchor: cell.content.from },
+        annotations: [Transaction.userEvent.of("select"), Transaction.addToHistory.of(false)],
+      });
+      parent.focus();
+      await settle();
+      focus(1, 0);
+      await settle();
+      requireCell(1, 0, text);
+      return parent.state.doc.toString();
+    };
+    await nativeCheck("native-extended-editing", async () => {
+      for (const example of extendedEditingCases) {
+        await resetFixture();
+        (owner as { destroyTableCell(): void }).destroyTableCell();
+        const cell = model().rows[1][0];
+        parent.dispatch({
+          changes: {
+            from: cell.content.from,
+            to: cell.content.to,
+            insert: example.text.replaceAll("\n", "<br>"),
+          },
+          selection: { anchor: cell.content.from },
+          annotations: [Transaction.userEvent.of("select"), Transaction.addToHistory.of(false)],
+        });
+        parent.focus();
+        await settle();
+        focus(1, 0);
+        await settle();
+        requireCell(1, 0, example.text);
+        const before = parent.state.doc.toString();
+        await domKeys(example.keys);
+        await settle();
+        requireCell(1, 0, example.result);
+        await domKeys("u");
+        await settle();
+        requireCheck(
+          parent.state.doc.toString() === before,
+          `${example.keys} did not undo as one native-cell change: ${JSON.stringify({ before, after: parent.state.doc.toString(), mode: parent.dom.dataset.lindvimeraMode })}.`,
+        );
+      }
+    });
+    await nativeCheck("native-ex-editing-and-addresses", async () => {
+      for (const example of exEditingCases) {
+        const before = await seedExCell(example.text);
+        if (example.before) await domKeys(example.before);
+        submitEx(context().cellView ?? parent, example.command);
+        await waitNavigation(
+          () => model().rows[1][0].map.text === example.result,
+          `Native :${example.command} did not produce ${JSON.stringify(example.result)}.`,
+        );
+        requireCell(1, 0, example.result);
+        if (example.register)
+          requireCheck(
+            Vim.getRegisterController().getRegister(example.register.name).toString() ===
+              example.register.text,
+            `Native :${example.command} wrote the wrong register.`,
+          );
+        await domKeys("u");
+        await waitNavigation(
+          () => parent.state.doc.toString() === before,
+          `Native :${example.command} did not undo in one parent event.`,
+        );
+      }
+      const before = await seedExCell("one\ntwo\nthree");
+      submitEx(context().cellView ?? parent, "1,2yank a");
+      requireCheck(
+        Vim.getRegisterController().getRegister("a").toString() === "one\ntwo\n",
+        "Native Ex yank lost linewise register content.",
+      );
+      submitEx(context().cellView ?? parent, "$put a");
+      await waitNavigation(
+        () => model().rows[1][0].map.text === "one\ntwo\nthree\none\ntwo",
+        "Native Ex put did not append linewise content inside the cell.",
+      );
+      requireCell(1, 0, "one\ntwo\nthree\none\ntwo");
+      await domKeys("u");
+      await waitNavigation(
+        () => parent.state.doc.toString() === before,
+        "Native Ex put did not undo once.",
+      );
+    });
+    await nativeCheck("native-ex-rejection-and-confirmation", async () => {
+      await seedExCell("one one one");
+      for (const command of [
+        "global/one/d",
+        "normal x",
+        "set number",
+        "write",
+        "%s/one/X/z",
+        "%s/[/X/g",
+        "1delete | 2delete",
+        "%s/missing/X/g",
+      ]) {
+        const before = parent.state.doc.toString();
+        const position = context().position();
+        submitEx(context().cellView ?? parent, command);
+        await waitNavigation(
+          () => !cm.state.dialog,
+          `Rejected native :${command} retained its prompt.`,
+        );
+        requireCheck(
+          parent.state.doc.toString() === before,
+          `Rejected native :${command} changed the parent note.`,
+        );
+        requirePosition(position.row, position.column, position.offset);
+      }
+      for (const cancel of ["q", "Escape"]) {
+        const before = await seedExCell("one one one");
+        submitEx(context().cellView ?? parent, "%s/one/X/gc");
+        await waitNavigation(
+          () => !!cm.state.dialog?.querySelector("input"),
+          "Native substitute confirmation did not open.",
+          false,
+        );
+        answerEx(cm.state.dialog, "y");
+        answerEx(cm.state.dialog, cancel);
+        await waitNavigation(
+          () => !cm.state.dialog && model().rows[1][0].map.text === "X one one",
+          `Native confirmation ${cancel} did not retain accepted replacements.`,
+        );
+        requireCell(1, 0, "X one one");
+        await domKeys("u");
+        await waitNavigation(
+          () => parent.state.doc.toString() === before,
+          "Native confirmed substitute did not undo in one parent event.",
+        );
+      }
+    });
+    await nativeCheck("native-ex-confirmation-replay-order", async () => {
+      const savedBindings = this.plugin.settings.keyBindings;
+      try {
+        this.plugin.settings.keyBindings = [
+          ...savedBindings.filter(
+            (binding) => !(binding.mode === "normal" && binding.from === "Q"),
+          ),
+          { mode: "normal", from: "Q", to: ":%s/one/X/gc<CR>gg0rZ" },
+        ];
+        await this.plugin.saveSettings();
+        for (const replay of ["macro", "mapping", "last-ex"] as const) {
+          const before = await seedExCell("one one");
+          if (replay === "macro") {
+            Vim.getRegisterController().getRegister("z").setText(":%s/one/X/gc<CR>gg0rZ");
+            await domKeys("@z");
+          } else if (replay === "mapping") await domKeys("Q");
+          else {
+            Vim.getRegisterController().getRegister("z").setText("@:gg0rZ");
+            await domKeys("@z");
+          }
+          await waitNavigation(
+            () => !!cm.state.dialog?.querySelector("input"),
+            `Native ${replay} did not pause for confirmation.`,
+            false,
+          );
+          requireCell(1, 0, "one one");
+          answerEx(cm.state.dialog, "a");
+          await waitNavigation(
+            () => !cm.state.dialog && model().rows[1][0].map.text === "Z X",
+            `Native ${replay} did not resume its suffix after confirmation.`,
+          );
+          requireCell(1, 0, "Z X");
+          await domKeys("u");
+          await waitNavigation(
+            () => parent.state.doc.toString() === before,
+            `Native ${replay} did not undo as one parent event.`,
+          );
+        }
+      } finally {
+        this.plugin.settings.keyBindings = savedBindings;
+        await this.plugin.saveSettings();
+      }
+    });
+    await nativeCheck("native-local-marks-and-cell-recreation", async () => {
+      focus(1, 1, 5);
+      const firstCellView = context().cellView;
+      await domKeys("ma");
+      focus(2, 2, 1);
+      requireCheck(
+        context().cellView !== firstCellView,
+        "Mark test did not recreate the native cell editor.",
+      );
+      await domKeys("`a");
+      await waitNavigation(
+        () => atCell(1, 1, 5),
+        "Backtick mark did not restore the original cell and offset.",
+      );
+      await domKeys("[t");
+      const bodyOffset = parent.state.selection.main.head;
+      await domKeys("mb'a");
+      await waitNavigation(
+        () => atCell(1, 1, 4),
+        "Apostrophe mark did not restore the marked cell line's first nonblank character.",
+      );
+      await domKeys("`b");
+      await waitNavigation(
+        () =>
+          !editorSession(parent)?.table.nativeInputView() &&
+          parent.state.selection.main.head === bodyOffset &&
+          parent.hasFocus,
+        "Cell-to-body mark did not restore the parent cursor and focus.",
+      );
+      await domKeys("`a");
+      await waitNavigation(() => atCell(1, 1, 5), "Body-to-cell mark did not restore the cell.");
+      await domKeys("<Tab>");
+      await waitNavigation(
+        () => atCell(1, 2, 0),
+        "Normal Tab stopped navigating cells after mark restoration.",
+      );
+      requireCheck(
+        parent.state.doc.toString() === baseline,
+        "Cross-surface marks changed note content.",
+      );
+    });
+    await nativeCheck("native-mark-edit-tracking", async () => {
+      focus(1, 1, 5);
+      await domKeys("mc0iX<Esc>");
+      await domKeys("[t`c");
+      await waitNavigation(
+        () => atCell(1, 1, 6),
+        "Cell mark did not track the internal edit during whole-cell Markdown synchronization.",
+      );
+      await domKeys("[t");
+      const prefix = "Inserted before the table.\n\n";
+      parent.dispatch({
+        changes: { from: 0, insert: prefix },
+        selection: { anchor: 0 },
+        annotations: Transaction.userEvent.of("input"),
+      });
+      parent.focus();
+      await domKeys("`c");
+      await waitNavigation(
+        () => atCell(1, 1, 6),
+        "Cell mark did not track a parent-note insertion before the table.",
+      );
+      requireCheck(
+        context().snapshot().rows[1][1].map.text === "a|b\nX続き",
+        "Mark tracking corrupted the edited cell.",
+      );
+    });
+    await nativeCheck("native-offscreen-mark-restoration", async () => {
+      focus(1, 1, 5);
+      await domKeys("md");
+      const previous = context().cellView;
+      await hideTable();
+      await domKeys("`d");
+      await waitNavigation(
+        () => atCell(1, 1, 5),
+        "A mark could not restore an offscreen native table.",
+      );
+      requireCheck(
+        context().cellView !== previous,
+        "Offscreen restoration reused the destroyed cell editor.",
+      );
+      requireCheck(
+        context().cellView?.hasFocus,
+        "Offscreen restoration did not focus the active native cell.",
+      );
+      const cellBounds = context().cellView!.dom.getBoundingClientRect();
+      const viewportBounds = parent.scrollDOM.getBoundingClientRect();
+      requireCheck(
+        cellBounds.bottom > viewportBounds.top && cellBounds.top < viewportBounds.bottom,
+        "Restored native cell remains outside the visible editor.",
+      );
+    });
+    await nativeCheck("native-navigation-replay-order", async () => {
+      const savedBindings = this.plugin.settings.keyBindings;
+      try {
+        focus(2, 2, 0);
+        await domKeys("me");
+        await hideTable();
+        Vim.getRegisterController().getRegister("z").setText("`e~");
+        await domKeys("@z");
+        await waitNavigation(() => {
+          const current = resolveNativeTable(owner);
+          return current.supported && current.context.snapshot().rows[2]?.[2]?.map.text === "Text";
+        }, "Macro did not wait for offscreen mark restoration before editing the cell.");
+        requireCheck(
+          parent.state.doc.toString().endsWith("Far paragraph 179."),
+          "Macro edited the departed body cursor before restoring the cell.",
+        );
+        await domKeys("u");
+        await waitNavigation(() => {
+          const current = resolveNativeTable(owner);
+          return current.supported && current.context.snapshot().rows[2]?.[2]?.map.text === "text";
+        }, "Macro cell change did not undo.");
+        focus(2, 2, 0);
+        await domKeys("me");
+        this.plugin.settings.keyBindings = [
+          ...savedBindings.filter(
+            (binding) => !(binding.mode === "normal" && binding.from === "Q"),
+          ),
+          { mode: "normal", from: "Q", to: "`e~" },
+        ];
+        await this.plugin.saveSettings();
+        await hideTable();
+        await domKeys("Q");
+        await waitNavigation(() => {
+          const current = resolveNativeTable(owner);
+          return current.supported && current.context.snapshot().rows[2]?.[2]?.map.text === "Text";
+        }, "Mapping did not wait for offscreen mark restoration before editing the cell.");
+        requireCheck(
+          parent.state.doc.toString().endsWith("Far paragraph 179."),
+          "Mapping edited the departed body cursor before restoration.",
+        );
+      } finally {
+        this.plugin.settings.keyBindings = savedBindings;
+        await this.plugin.saveSettings();
+      }
+    });
     await nativeCheck("native-cell-line-delete-undo-redo", async () => {
       focus(1, 1);
       keys(cm, "dd");

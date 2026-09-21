@@ -25,6 +25,7 @@ export class VimHistoryGroup {
   private prior: CodeMirror["operationObserver"];
   private operating = false;
   private operationStartedInInsert = false;
+  private holds = new Set<symbol>();
   private observer = {
     start: () => {
       this.operating = true;
@@ -104,7 +105,19 @@ export class VimHistoryGroup {
 
   /** Focus/settings/external document changes terminate the current input group. */
   close(): void {
+    if (this.holds.size) return;
     this.id = 0;
+  }
+
+  /** Keep a logical edit together while a host operation or confirmation is pending. */
+  hold(): () => void {
+    const token = Symbol();
+    this.holds.add(token);
+    this.begin();
+    return () => {
+      if (!this.holds.delete(token)) return;
+      if (!this.cm?.state.vim?.insertMode) this.close();
+    };
   }
 
   begin(): void {
@@ -117,6 +130,7 @@ export class VimHistoryGroup {
       if (this.cm.operationObserver === this.observer) this.cm.operationObserver = this.prior;
     }
     this.cm = null;
+    this.holds.clear();
     this.close();
   }
 }

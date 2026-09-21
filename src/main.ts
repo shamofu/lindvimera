@@ -164,6 +164,7 @@ export default class LindvimeraPlugin extends Plugin {
                         settings: () => this.settings,
                         wordSegmenter: () => this.wordSegmenter(),
                         owner: () => ownerOf(view),
+                        documentIdentity: () => view.state.field(editorInfoField, false)?.file,
                         inputUI: () => {
                           const overlays =
                             view.dom.ownerDocument.querySelectorAll(".modal-container, .menu");

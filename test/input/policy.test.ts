@@ -52,8 +52,8 @@ describe("per-editor supported editing policy", () => {
     expect(a.cm.state.vim!.marks.a).toBeUndefined();
     keys(b.cm, "ma");
     expect(b.cm.state.vim!.marks.a).toBeDefined();
-    expect(dispatchVimKeyEvent(a.cm, event(":"))).toBe("unhandled");
-    expect(a.cm.state.dialog).toBeFalsy();
+    expect(dispatchVimKeyEvent(a.cm, event(":"))).toBe("handled");
+    expect(a.cm.state.dialog).toBeTruthy();
     expect(a.cm.state.vim!.inputState.keyBuffer).toEqual([]);
   });
   it("preserves literal characters and rejects unsupported objects", () => {
@@ -62,7 +62,7 @@ describe("per-editor supported editing policy", () => {
     expect(cm.getCursor().ch).toBe(5);
     keys(cm, "0di(");
     expect(view.state.doc.toString()).toBe("alpha: () tail");
-    keys(cm, "dap");
+    keys(cm, "dat");
     expect(view.state.doc.toString()).toBe("alpha: () tail");
     expect(cm.state.vim!.inputState.operator).toBeFalsy();
   });
@@ -126,25 +126,132 @@ describe("per-editor supported editing policy", () => {
     keys(cm, "u");
     expect(view.state.doc.toString()).toBe("alpha beta gamma");
   });
-  it("blocks a stale unsupported dot edit and direct Ex execution", () => {
+  it("blocks a stale unsupported dot edit and Ex without an editing provider", () => {
     const { cm, view, rejected, remove } = editor();
     remove();
-    keys(cm, "~");
-    expect(view.state.doc.toString()).toBe("Alpha beta gamma");
+    keys(cm, "g?iw");
+    expect(view.state.doc.toString()).toBe("nycun beta gamma");
     installCommandPolicy(
       cm as CodeMirrorV,
       () => DEFAULT_SETTINGS,
       (message) => rejected.push(message),
     );
     keys(cm, ".");
-    expect(view.state.doc.toString()).toBe("Alpha beta gamma");
+    expect(view.state.doc.toString()).toBe("nycun beta gamma");
     expect(rejected).toHaveLength(1);
     Vim.handleEx(cm as CodeMirrorV, "%delete");
-    expect(view.state.doc.toString()).toBe("Alpha beta gamma");
+    expect(view.state.doc.toString()).toBe("nycun beta gamma");
   });
 });
 
 describe("mapping migration", () => {
+  it.each([
+    ":%s/😀/x/g<CR>@:",
+    "Vj:delete a<CR>",
+    ":1,$sort! iu<CR>",
+    ":s<CR>",
+    ":s/a/b/c<CR>~",
+    ":<Esc>i:<Esc>",
+    ":d<BS>y<CR>",
+    ":<BS>sfoo<Esc>",
+    ":<BS>i<CR><Esc>",
+  ])("accepts validated Ex input and transitions in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toEqual([]);
+  });
+  it("keeps the mode for an empty Ex command and completes the automatic Visual range", () => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "v:<C-u><CR>U" }]).issues).toEqual(
+      [],
+    );
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "v:<CR>U" }]).issues).toHaveLength(
+      1,
+    );
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "v:<BS>U" }]).issues).toHaveLength(
+      1,
+    );
+  });
+  it("retains Visual mode when Backspace cancels an emptied Ex prompt", () => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "v:<C-u><BS>U" }]).issues).toEqual(
+      [],
+    );
+  });
+  it.each([
+    ":global/x/d<CR>",
+    ":normal x<CR>",
+    ":write<CR>",
+    ":s/a/b/e<CR>",
+    ":delete|yank<CR>",
+    ":/x/delete<CR>",
+    ":s/(/x/<CR>",
+  ])("rejects unsupported Ex syntax in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);
+  });
+  it.each(["magg'a", "magg`a", "3<C-o>2<C-i>"])("accepts local navigation in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toEqual([]);
+  });
+  it.each(["mA", "'A", "`A", "d'a", "v`a", "vmz"])("rejects unsupported mark scope in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);
+  });
+  it.each(["v<C-c>U", "c<C-c>:write<CR>"])(
+    "does not treat cancellation as Visual or Insert in %s",
+    (to) => {
+      expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);
+    },
+  );
+  it.each(["vvU", "VVU", "<C-v><C-v>U", "vipVU", "VisvU", "vgS)U"])(
+    "rejects Visual-only commands after returning to Normal in %s",
+    (to) => {
+      expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);
+    },
+  );
+  it.each([
+    "vviX<Esc>",
+    "VViX<Esc>",
+    "<C-v><C-v>iX<Esc>",
+    "vVU",
+    "VvU",
+    "v<C-v>U",
+    "vipViX<Esc>",
+    "VisviX<Esc>",
+    "gNgS)iX<Esc>",
+  ])("tracks Visual subtypes and completed surrounds in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toEqual([]);
+  });
+  it.each(["gUsw", "gUdw", "gugUw", "dcw"])("rejects mismatched operators in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);
+  });
+  it.each([
+    "gUiw",
+    "guu",
+    "gUU",
+    "g~~",
+    "2gU2w",
+    "vipU",
+    "visu",
+    "dap",
+    "cisnew<Esc>",
+    "gnU",
+    "cgnnew<Esc>.",
+    "gNdiw",
+    "vlgU",
+    "gJ",
+    "2+_2-",
+    "g*gnU",
+    "v~iX<Esc>",
+    "vrXiY<Esc>",
+    "dg*",
+    "cg#X<Esc>",
+  ])("accepts extended editing and mode transitions in %s", (to) => {
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toEqual([]);
+  });
+  it("resolves mappings after search-selection and case operators in the resulting mode", () => {
+    const definitions: KeyBinding[] = [
+      { mode: "normal", from: "Q", to: "gnZ" },
+      { mode: "visual", from: "Z", to: "U" },
+      { mode: "normal", from: "K", to: "guwZ" },
+      { mode: "normal", from: "Z", to: ":unsupported<CR>" },
+    ];
+    expect(analyseKeyBindings(definitions).active).toEqual(definitions.slice(0, 2));
+  });
   it("retains unsupported saved definitions while disabling only them and dependents", () => {
     const good: KeyBinding = { mode: "normal", from: "Q", to: "dw" };
     const bad: KeyBinding = { mode: "normal", from: "Z", to: ":write<CR>" };
@@ -198,9 +305,15 @@ describe("mapping migration", () => {
     },
   );
   it("keeps Visual endpoint swaps in Visual when checking following commands", () => {
-    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "vo:" }]).active).toEqual([]);
-    expect(analyseKeyBindings([{ mode: "visual", from: "Q", to: "o:" }]).active).toEqual([]);
-    expect(analyseKeyBindings([{ mode: "visual", from: "Q", to: "O:" }]).active).toEqual([]);
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "vo:delete<CR>" }]).issues).toEqual(
+      [],
+    );
+    expect(analyseKeyBindings([{ mode: "visual", from: "Q", to: "o:delete<CR>" }]).issues).toEqual(
+      [],
+    );
+    expect(analyseKeyBindings([{ mode: "visual", from: "Q", to: "O:delete<CR>" }]).issues).toEqual(
+      [],
+    );
     expect(analyseKeyBindings([{ mode: "visual", from: "Q", to: "oI:<Esc>" }]).issues).toEqual([]);
   });
   it("expands embedded mappings in their current mode but leaves literal arguments intact", () => {

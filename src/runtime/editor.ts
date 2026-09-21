@@ -1,5 +1,5 @@
 import { EditorState, Transaction, type Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin } from "@codemirror/view";
+import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { dispatchVimKeyEvent, getCM, skipVimKeyEvent, vim, Vim } from "@replit/codemirror-vim";
 import type { CodeMirrorV } from "@replit/codemirror-vim-core";
 import { EscapeInputSession } from "../input/escape";
@@ -25,10 +25,14 @@ import {
   type JapaneseSegmenter,
 } from "../word";
 import { VimHistoryGroup } from "./history";
+import { PendingCommands } from "./pending";
+import { NavigationSession } from "../navigation/session";
+import { ExSession } from "../ex/session";
 
 export interface EditorHost {
   settings(): LindvimeraSettings;
   owner(): unknown;
+  documentIdentity?(): unknown;
   wordSegmenter?(): JapaneseSegmenter | undefined;
   modeChanged?(mode: string): void;
   error?(message: string): void;
@@ -58,6 +62,9 @@ interface EditorLifecycle {
 export class EditorSession {
   readonly cm: NonNullable<ReturnType<typeof getCM>>;
   readonly table: NativeTableSession;
+  readonly navigation: NavigationSession;
+  readonly pending: PendingCommands;
+  readonly ex: ExSession;
   private escape: EscapeInputSession;
   private inputTarget: EditorView;
   private removeWords?: () => void;
@@ -88,11 +95,33 @@ export class EditorSession {
     );
     this.inputTarget = view;
     history.attach(cm);
+    this.pending = new PendingCommands(cm, history, (message) => host.error?.(message));
+    this.ex = new ExSession(cm, {
+      documentIdentity: () => host.documentIdentity?.() ?? view,
+      history,
+      pending: this.pending,
+      error: (message) => host.error?.(message),
+    });
+    this.navigation = new NavigationSession(cm, {
+      owner: () => host.owner(),
+      documentIdentity: () => host.documentIdentity?.() ?? view,
+      waitFor: (task, cancel) => this.pending.waitFor(task, cancel),
+      cancelPending: () => {
+        this.ex.reset();
+        this.pending.cancel();
+      },
+      error: (message) => host.error?.(message),
+      afterRestore: () => {
+        this.switchTarget(true);
+        this.modeChanged();
+      },
+    });
     this.table = new NativeTableSession(cm, {
       resolveOwner: () => host.owner(),
       enabled: () => host.settings().tables,
-      inputExtension: history.inputExtension,
+      inputExtension: [history.inputExtension, this.navigation.inputExtension],
       beforeTargetChange: () => {
+        this.ex.reset();
         this.escape?.flush();
         cancelMarkdownInput(cm as CodeMirrorV);
         this.history.close();
@@ -132,6 +161,7 @@ export class EditorSession {
     const originalDestroy = lifecycle.destroy;
     const setState: EditorView["setState"] = (state) => {
       this.finishInsert();
+      this.navigation.reset();
       originalSetState.call(view, state);
     };
     const destroy = () => {
@@ -209,8 +239,8 @@ export class EditorSession {
     this.modeChanged();
   }
 
-  private switchTarget(): void {
-    this.table.syncTarget();
+  private switchTarget(navigating = this.pending.pending): void {
+    this.table.syncTarget(navigating);
     const next = this.table.nativeInputView() ?? this.view;
     if (next !== this.inputTarget) {
       this.escape.flush();
@@ -284,6 +314,12 @@ export class EditorSession {
       // from interpreting the same composition key as another command.
       event.stopImmediatePropagation();
       return remember("ime");
+    }
+    if (this.pending.pending) {
+      if (event.key === "Escape" || (event.ctrlKey && (event.key === "[" || event.key === "c"))) {
+        if (!this.ex.cancelConfirmation()) this.pending.cancel();
+      }
+      return this.consume(event);
     }
     // Scope/capture runs before CodeMirror's keydown preparation. Flush the last
     // native DOM input before Vim changes mode or reads the document; otherwise
@@ -410,6 +446,10 @@ export class EditorSession {
     this.modeChanged();
   }
 
+  update(update: ViewUpdate): void {
+    this.navigation.update(update);
+  }
+
   private readonly scheduleWordConfiguration = () => {
     if (!this.pendingWords || this.wordRefreshScheduled) return;
     this.wordRefreshScheduled = true;
@@ -425,6 +465,7 @@ export class EditorSession {
     const macro = Vim.getVimGlobalState_().macroModeState;
     return !!(
       this.cm.curOp ||
+      this.pending.pending ||
       macro.isRecording ||
       macro.isPlaying ||
       state?.expectLiteralNext ||
@@ -498,6 +539,9 @@ export class EditorSession {
     this.cm.off("vim-mode-change", this.modeChanged);
     this.cm.off("vim-command-done", this.scheduleWordConfiguration);
     this.pendingWords = undefined;
+    this.navigation.destroy();
+    this.ex.destroy();
+    this.pending.destroy();
     this.table.destroy();
     this.removePolicy();
     this.removeWords?.();

@@ -5,8 +5,8 @@ if (typeof window !== "undefined" && typeof Document !== "undefined") {
       return this.defaultView;
     },
   });
-  window.createSpan = (options) => {
-    const element = document.createElement("span");
+  window.createEl = (tag, options) => {
+    const element = document.createElement(tag);
     if (typeof options === "string") element.className = options;
     else if (options) {
       if (options.cls)
@@ -16,4 +16,5 @@ if (typeof window !== "undefined" && typeof Document !== "undefined") {
     }
     return element;
   };
+  window.createSpan = (options) => window.createEl("span", options);
 }

@@ -1,0 +1,142 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 928a55d..b24507a 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -2380,7 +2380,6 @@ export function initVim(CM) {
+       }
+ 
+       var prev = !motionArgs.forward;
+-      prev = (state.isReversed()) ? !prev : prev;
+ 
+       // next: [from, to] | null
+       var next = findNextFromAndToInclusive(cm, prev, query, motionArgs.repeat, vim);
+@@ -2399,10 +2398,9 @@ export function initVim(CM) {
+       // deal with visual mode in order to select an appropriate match.
+ 
+       var from = next[0];
+-      // For whatever reason, when we use the "to" as returned by searchcursor.js directly,
+-      // the resulting selection is extended by 1 char. Let's shrink it so that only the
+-      // match is selected.
+-      var to = new Pos(next[1].line, next[1].ch - 1);
++      // Search cursors return exclusive ends; Visual mode stores the final
++      // grapheme's start, including when a match crosses a line boundary.
++      var to = inclusiveSearchEnd(cm, next[0], next[1]);
+ 
+       if (vim.visualMode) {
+         // If we were in visualLine or visualBlock mode, get out of it.
+@@ -2416,19 +2414,7 @@ export function initVim(CM) {
+         // the search result.
+         var anchor = vim.sel.anchor;
+         if (anchor) {
+-          if (state.isReversed()) {
+-            if (motionArgs.forward) {
+-              return [anchor, from];
+-            }
+-
+-            return [anchor, to];
+-          } else {
+-            if (motionArgs.forward) {
+-              return [anchor, to];
+-            }
+-
+-            return [anchor, from];
+-          }
++          return [anchor, prev ? from : to];
+         }
+       } else {
+         // Let's turn visual mode on.
+@@ -5660,12 +5646,16 @@ export function initVim(CM) {
+       return cursor.from();
+     });
+   }
++  /** @arg {CodeMirror} cm @arg {Pos} from @arg {Pos} to */
++  function inclusiveSearchEnd(cm, from, to) {
++    var end = cm.posFromIndex(Math.max(cm.indexFromPos(from), cm.indexFromPos(to) - 1));
++    var provider = cm.state.wordBoundaryProvider;
++    return provider ? provider.character(cm, end, 0) : end;
++  }
+   /**
+-   * Pretty much the same as `findNext`, except for the following differences:
+-   *
+-   * 1. Before starting the search, move to the previous search. This way if our cursor is
+-   * already inside a match, we should return the current match.
+-   * 2. Rather than only returning the cursor's from, we return the cursor's from and to as a tuple.
++   * Select the containing match before counting further matches. The adapter's
++   * backward cursor excludes partially overlapping matches, so reversing a
++   * cursor twice cannot reliably discover the match containing the caret.
+    * @arg {CodeMirror} cm
+    * @arg {boolean} prev
+    * @arg {RegExp} query
+@@ -5676,34 +5666,44 @@ export function initVim(CM) {
+   function findNextFromAndToInclusive(cm, prev, query, repeat, vim) {
+     return cm.operation(function() {
+       if (repeat === undefined) { repeat = 1; }
+-      var pos = cm.getCursor();
+-      var cursor = cm.getSearchCursor(query, pos);
+-
+-      // Go back one result to ensure that if the cursor is currently a match, we keep it.
+-      var found = cursor.find(!prev);
+-
+-      // If we haven't moved, go back one more (similar to if i==0 logic in findNext).
+-      // @ts-ignore
+-      if (!vim.visualMode && found && cursorEqual(cursor.from(), pos)) {
+-        cursor.find(!prev);
+-      }
+-
+-      for (var i = 0; i < repeat; i++) {
+-        found = cursor.find(prev);
+-        if (!found) {
+-          // SearchCursor may have returned null because it hit EOF, wrap
+-          // around and try again.
+-          cursor = cm.getSearchCursor(query,
+-              // @ts-ignore
+-              (prev) ? new Pos(cm.lastLine()) : new Pos(cm.firstLine(), 0) );
+-          if (!cursor.find(prev)) {
+-            return;
+-          }
+-        }
+-      }
+-      var from = cursor.from();
+-      var to = cursor.to();
+-      return from && to && [from, to];
++      var pos = vim.visualMode ? vim.sel.head : cm.getCursor();
++      var offset = cm.indexFromPos(pos);
++      var cursor = cm.getSearchCursor(query, new Pos(cm.firstLine(), 0));
++      /** @type {[Pos, Pos][]} */
++      var matches = [];
++      var selected = -1;
++      var preceding = -1;
++      while (cursor.find(false)) {
++        var from = cursor.from(), to = cursor.to();
++        if (!from || !to) break;
++        var fromOffset = cm.indexFromPos(from);
++        var toOffset = cm.indexFromPos(to);
++        // Vim selects one character for a zero-width search result.
++        if (fromOffset === toOffset) {
++          to = from.ch < lineLength(cm, from.line) && cm.state.wordBoundaryProvider
++            ? cm.state.wordBoundaryProvider.character(cm, from, 1)
++            : cm.posFromIndex(toOffset + 1);
++          toOffset = cm.indexFromPos(to);
++        }
++        if (fromOffset <= offset && (offset < toOffset || fromOffset === toOffset && offset === fromOffset)) {
++          selected = matches.length;
++        }
++        if (fromOffset < offset) preceding = matches.length;
++        matches.push([from, to]);
++      }
++      if (!matches.length) return;
++      var direction = prev ? -1 : 1;
++      if (selected < 0) {
++        selected = prev ? preceding : preceding + 1;
++      } else if (vim.visualMode) {
++        var current = matches[selected];
++        var edge = prev ? current[0] : inclusiveSearchEnd(cm, current[0], current[1]);
++        // Repeated gn/gN extends an existing Visual selection to another match.
++        if (cursorEqual(pos, edge)) selected += direction;
++      }
++      selected += direction * (repeat - 1);
++      selected = (selected % matches.length + matches.length) % matches.length;
++      return matches[selected];
+     });
+   }
+   /** @arg {CodeMirrorV} cm */
