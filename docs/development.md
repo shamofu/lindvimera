@@ -155,7 +155,7 @@ main CIのcandidate・E2E診断は90日保持します。ReleaseでもE2E開始�
 
 ### Release本文と過去分の更新
 
-本文は`scripts/release/notes.mjs`がGit履歴から自動生成します。「変更点」の下へコミット件名とcommitリンクを古い順で並べ、件名は原文のままMarkdownとしてエスケープします。保守・バージョン更新・merge commitも含みます。比較元は、対象commitの祖先にある、対象より小さい最大versionの公開済み正式Releaseです。比較元から対象タグまでを列挙し、比較リンクを添えます。初回は履歴の先頭から対象タグまでを掲載し、比較リンクは付けません。空差分は「前回からコミットの変更はありません」とし、必要なタグや履歴を取得できなければ生成を失敗させます。
+GitHub Releaseの本文は英語に統一し、`scripts/release/notes.mjs`がGit履歴から自動生成します。「Changes」の下へコミット件名とcommitリンクを古い順で並べ、件名は原文のままMarkdownとしてエスケープするため、英語で記述してください。保守・バージョン更新・merge commitも含みます。比較元は、対象commitの祖先にある、対象より小さい最大versionの公開済み正式Releaseです。比較元から対象タグまでを列挙し、「Full Changelog」の比較リンクを添えます。初回は履歴の先頭から対象タグまでを掲載し、比較リンクは付けません。空差分は「No commit changes since the previous release.」とし、必要なタグや履歴を取得できなければ生成を失敗させます。
 
 Releaseタイトルでversionを示すため、本文に`Lindvimera <version>`や`Verified main CI`などの検証リンクは掲載しません。変更点は専用HTMLコメントで囲み、末尾に出所の管理マーカーを非表示で保持します。検証情報は添付された`provenance.json`から参照できます。
 

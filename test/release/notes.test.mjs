@@ -55,7 +55,7 @@ test("first release lists the entire history with full commit links and managed 
   const notes = repo.notes("0.1.0", ["0.1.0"]);
   assert.equal(notes.baseTag, null);
   assert.deepEqual(notes.commits, [{ sha: first, subject: "init: the Lindvimera awakens" }]);
-  assert.ok(notes.markdown.startsWith(`${NOTES_START}\n## 変更点\n\n`));
+  assert.ok(notes.markdown.startsWith(`${NOTES_START}\n## Changes\n\n`));
   assert.ok(notes.markdown.endsWith(`${NOTES_END}\n`));
   assert.ok(notes.markdown.includes(`https://github.com/owner/project/commit/${first}`));
   assert.ok(!notes.markdown.includes("/compare/"));
@@ -79,7 +79,11 @@ test("usual release includes maintenance and version commits in oldest-first ord
       "v0.2.0",
     ],
   );
-  assert.match(notes.markdown, /compare\/0\.1\.0\.\.\.0\.2\.0/);
+  assert.ok(
+    notes.markdown.includes(
+      "**Full Changelog:** [0.1.0 → 0.2.0](https://github.com/owner/project/compare/0.1.0...0.2.0)",
+    ),
+  );
 });
 
 test("selects the greatest numeric version instead of string or publication order", (t) => {
@@ -146,7 +150,7 @@ test("same-commit version emits an empty-diff message and comparison link", (t) 
   repo.git("tag", "0.2.0");
   const notes = repo.notes("0.2.0", ["0.1.0"]);
   assert.equal(notes.commits.length, 0);
-  assert.ok(notes.markdown.includes("前回からコミットの変更はありません。"));
+  assert.ok(notes.markdown.includes("No commit changes since the previous release."));
   assert.ok(notes.markdown.includes("/compare/0.1.0...0.2.0"));
 });
 

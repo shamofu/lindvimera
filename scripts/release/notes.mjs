@@ -142,9 +142,9 @@ export function generateReleaseNotes({ repository, tag, commit, releases, cwd = 
     }
     commits.push({ sha, subject: fields[index + 1] });
   }
-  const lines = [NOTES_START, "## 変更点", ""];
+  const lines = [NOTES_START, "## Changes", ""];
   if (commits.length === 0) {
-    lines.push("前回からコミットの変更はありません。");
+    lines.push("No commit changes since the previous release.");
   } else {
     lines.push(
       ...commits.map(
@@ -156,7 +156,7 @@ export function generateReleaseNotes({ repository, tag, commit, releases, cwd = 
   if (base) {
     lines.push(
       "",
-      `**変更の全体:** [${base.tag} → ${tag}](https://github.com/${repository}/compare/${base.tag}...${tag})`,
+      `**Full Changelog:** [${base.tag} → ${tag}](https://github.com/${repository}/compare/${base.tag}...${tag})`,
     );
   }
   lines.push(NOTES_END, "");

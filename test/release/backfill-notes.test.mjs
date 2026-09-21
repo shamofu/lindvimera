@@ -9,7 +9,7 @@ import { NOTES_END, NOTES_START } from "../../scripts/release/notes.mjs";
 
 const repository = "owner/project";
 const marker = '<!-- lindvimera-release:{"schemaVersion":1,"artifactId":123,"commit":"old"} -->';
-const markdown = `${NOTES_START}\n## 変更点\n\n- Example commit\n${NOTES_END}\n`;
+const markdown = `${NOTES_START}\n## Changes\n\n- Example commit\n${NOTES_END}\n`;
 
 function update(body, overrides = {}) {
   return updateReleaseBody({ body, tag: "0.2.0", repository, markdown, ...overrides });
