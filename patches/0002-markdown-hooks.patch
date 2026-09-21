@@ -1,0 +1,92 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 3cafa6b..572a2e7 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -952,7 +952,7 @@ export function initVim(CM) {
+         vim.inputState.keyBuffer.push(key);
+         var keys = vim.inputState.keyBuffer.join("");
+         var keysAreChars = key.length == 1;
+-        var match = commandDispatcher.matchCommand(keys, defaultKeymap, vim.inputState, 'insert');
++        var match = commandDispatcher.matchCommand(keys, defaultKeymap, vim.inputState, 'insert', cm);
+         var changeQueue = vim.inputState.changeQueue;
+ 
+         if (match.type == 'none') { clearInputState(cm); return false; }
+@@ -1011,7 +1011,7 @@ export function initVim(CM) {
+           // multikey operators act linewise by repeating only the last character
+           mainKey = vim.inputState.operatorShortcut;
+         }
+-        var match = commandDispatcher.matchCommand(mainKey, defaultKeymap, vim.inputState, context);
++        var match = commandDispatcher.matchCommand(mainKey, defaultKeymap, vim.inputState, context, cm);
+         if (match.type == 'none') { clearInputState(cm); return false; }
+         else if (match.type == 'partial') {
+           if (match.expectLiteralNext) vim.expectLiteralNext = true;
+@@ -1596,8 +1596,8 @@ export function initVim(CM) {
+      * @param {InputStateInterface} inputState
+      * @param {string} context
+      */
+-    matchCommand: function(keys, keyMap, inputState, context) {
+-      var matches = commandMatches(keys, keyMap, context, inputState);
++    matchCommand: function(keys, keyMap, inputState, context, cm) {
++      var matches = commandMatches(keys, keyMap, context, inputState, cm);
+       var bestMatch = matches.full[0];
+       if (!bestMatch) {
+         if (matches.partial.length) {
+@@ -1671,13 +1671,18 @@ export function initVim(CM) {
+           inputState.motionArgs = { linewise: true, repeat: 1 };
+           this.evalInput(cm, vim);
+           return;
+-        } else {
++        } else if (!command.continueOperator) {
+           // 2 different operators in a row doesn't make sense.
+           clearInputState(cm);
+         }
+       }
+       inputState.operator = command.operator;
+       inputState.operatorArgs = copyArgs(command.operatorArgs);
++      if (command.operatorCount === 'argument') {
++        inputState.operatorArgs.count = inputState.getRepeat() || 1;
++        inputState.prefixRepeat = [];
++        inputState.motionRepeat = [];
++      }
+       if (command.keys.length > 1) {
+         inputState.operatorShortcut = command.keys;
+       }
+@@ -3615,7 +3620,7 @@ export function initVim(CM) {
+    * @param {string} context
+    * @param {InputStateInterface} inputState
+    */
+-  function commandMatches(keys, keyMap, context, inputState) {
++  function commandMatches(keys, keyMap, context, inputState, cm) {
+     // Partial matches are not applied. They inform the key handler
+     // that the current key sequence is a subsequence of a valid key
+     // sequence, so that the key buffer is not cleared.
+@@ -3625,6 +3630,7 @@ export function initVim(CM) {
+     var startIndex = noremap ? keyMap.length - defaultKeymapLength : 0;
+     for (var i = startIndex; i < keyMap.length; i++) {
+       var command = keyMap[i];
++      if (command.when && !command.when(cm)) continue;
+       if (context == 'insert' && command.context != 'insert' ||
+           (command.context && command.context != context) ||
+           inputState.operator && command.type == 'action' ||
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index fbf98a6..2cec887 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -71,6 +71,7 @@ export type SearchArgs = {
+ }
+ 
+ export type OperatorArgs = {
++    count?: number,
+     repeat?: number,
+     forward?: boolean,
+     linewise?: boolean,
+@@ -239,6 +240,9 @@ export type defineOption2 = ((
+ export type ExFn = (cm: CodeMirrorV, params: ExParams)=> void;
+ 
+ type allCommands = {
++    when?: (cm: CodeMirrorV) => boolean,
++    continueOperator?: boolean,
++    operatorCount?: 'argument',
+     keys: string,
+     context?: string,
+     interlaceInsertRepeat?: boolean,

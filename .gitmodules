@@ -1,0 +1,3 @@
+[submodule "codemirror-vim"]
+	path = codemirror-vim
+	url = https://github.com/replit/codemirror-vim.git

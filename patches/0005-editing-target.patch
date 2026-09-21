@@ -1,0 +1,954 @@
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index e879bb1..938838a 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -242,6 +242,8 @@ export type ExFn = (cm: CodeMirrorV, params: ExParams)=> void;
+ type allCommands = {
+     when?: (cm: CodeMirrorV) => boolean,
+     continueOperator?: boolean,
++    /** Allow a host action to cancel a pending operator before it runs. */
++    cancelPendingOperator?: boolean,
+     operatorCount?: 'argument',
+     keys: string,
+     context?: string,
+@@ -437,6 +439,8 @@ export interface WordBoundaryProvider {
+ }
+ 
+ export interface CM5EditorInterface {
++    /** Replay a host-native Insert navigation command when available. */
++    nativeInputHandler?: (key: string) => boolean
+     state: {
+         statusbar?: Element | null
+         dialog?: HTMLElement | null
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 6abba62..c12114e 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -318,6 +318,25 @@ export function initVim(CM) {
+    */
+   var langmap = parseLangmap('');
+ 
++  var inputTargets = new WeakMap();
++  var inputTargetHandlers = new WeakMap();
++  /** @arg {CodeMirror} cm */
++  function refreshVimInputTarget(cm) {
++    var previous = inputTargets.get(cm);
++    var current = cm.getInputField();
++    if (previous === current) return;
++    // @ts-ignore
++    var paste = getOnPasteFn(cm);
++    if (previous) {
++      CM.off(previous, 'paste', paste);
++      CM.off(previous, 'keydown', onKeyEventTargetKeyDown);
++    }
++    inputTargets.set(cm, current);
++    CM.on(current, 'paste', paste);
++    if (cm.state.vim?.insertMode && !vimGlobalState.macroModeState.isPlaying)
++      CM.on(current, 'keydown', onKeyEventTargetKeyDown);
++  }
++
+   /** @arg {CodeMirror} cm */
+   function enterVimMode(cm) {
+     cm.setOption('disableInput', true);
+@@ -325,16 +344,25 @@ export function initVim(CM) {
+     CM.signal(cm, "vim-mode-change", {mode: "normal"});
+     cm.on('cursorActivity', onCursorActivity);
+     maybeInitVimState(cm);
+-    // @ts-ignore
+-    CM.on(cm.getInputField(), 'paste', getOnPasteFn(cm));
++    var refreshInput = function() { refreshVimInputTarget(cm); };
++    inputTargetHandlers.set(cm, refreshInput);
++    cm.on('vim-editing-target-change', refreshInput);
++    refreshVimInputTarget(cm);
+   }
+ 
+   /** @arg {CodeMirror} cm */
+   function leaveVimMode(cm) {
+     cm.setOption('disableInput', false);
+     cm.off('cursorActivity', onCursorActivity);
+-    // @ts-ignore
+-    CM.off(cm.getInputField(), 'paste', getOnPasteFn(cm));
++    var inputTarget = inputTargets.get(cm);
++    if (inputTarget) {
++      // @ts-ignore
++      CM.off(inputTarget, 'paste', getOnPasteFn(cm));
++      CM.off(inputTarget, 'keydown', onKeyEventTargetKeyDown);
++    }
++    cm.off('vim-editing-target-change', inputTargetHandlers.get(cm));
++    inputTargets.delete(cm);
++    inputTargetHandlers.delete(cm);
+     cm.state.vim = null;
+     if (highlightTimeout) clearTimeout(highlightTimeout);
+   }
+@@ -835,6 +863,35 @@ export function initVim(CM) {
+       if (cm.state.vim && cm.state.vim.insertMode && !vimGlobalState.macroModeState.isPlaying)
+         onKeyEventTargetKeyDown(event);
+     },
++    /** Record a host-native Insert navigation command for dot and macro replay.
++     * @arg {CodeMirror} cm @arg {string} key */
++    recordNativeInputKey: function(cm, key) {
++      var macroModeState = vimGlobalState.macroModeState;
++      if (!cm.state.vim?.insertMode || macroModeState.isPlaying) return;
++      var change = macroModeState.lastInsertModeChanges;
++      var changes = change.changes;
++      var previous = changes.slice();
++      var maybeReset = change.maybeReset;
++      var expectCursorActivity = change.expectCursorActivityForChange;
++      change.maybeReset = false;
++      change.expectCursorActivityForChange = true;
++      var marker = new InsertModeKey(key, /**@type{KeyboardEvent}*/({key: key}));
++      changes.push(marker);
++      // A host keymap may decline a key. Remove only this tentative command,
++      // preserving any real edits or cursor activity performed by the host.
++      return function rollbackNativeInputKey() {
++        var index = changes.indexOf(marker);
++        if (index < 0) return;
++        var unchanged = change.changes === changes && changes.length === previous.length + 1
++          && previous.every(function(item, i) { return changes[i] === item; })
++          && change.maybeReset === false && change.expectCursorActivityForChange === true;
++        changes.splice(index, 1);
++        if (unchanged) {
++          change.maybeReset = maybeReset;
++          change.expectCursorActivityForChange = expectCursorActivity;
++        }
++      };
++    },
+     /**@type {(lhs: string, rhs: string, ctx: string) => void} */
+     map: function(lhs, rhs, ctx) {
+       // Add user defined key bindings.
+@@ -3664,7 +3721,7 @@ export function initVim(CM) {
+       if (command.when && !command.when(cm)) continue;
+       if (context == 'insert' && command.context != 'insert' ||
+           (command.context && command.context != context) ||
+-          inputState.operator && command.type == 'action' ||
++          inputState.operator && command.type == 'action' && !command.cancelPendingOperator ||
+           !(match = commandMatch(keys, command.keys))) { continue; }
+       if (match == 'partial') { partial.push(command); }
+       if (match == 'full') { full.push(command); }
+@@ -7076,6 +7133,7 @@ export function initVim(CM) {
+   }
+   /**@arg {CodeMirrorV} cm, @arg {string} key */
+   function sendCmKey(cm, key) {
++    if (cm.nativeInputHandler?.(key)) return;
+     CM.lookupKey(key, 'vim-insert', function keyHandler(binding) {
+       if (typeof binding == 'string') {
+         CM.commands[binding](cm);
+diff --git a/packages/codemirror-vim/src/block-cursor.ts b/packages/codemirror-vim/src/block-cursor.ts
+index 65166b1..b209e61 100644
+--- a/packages/codemirror-vim/src/block-cursor.ts
++++ b/packages/codemirror-vim/src/block-cursor.ts
+@@ -72,7 +72,7 @@ export class BlockCursorPlugin {
+   }
+ 
+   setBlinkRate() {
+-    let config = getDrawSelectionConfig(this.cm.cm6.state);
++    let config = getDrawSelectionConfig(this.view.state);
+     let blinkRate = config.cursorBlinkRate;
+     this.cursorLayer.style.animationDuration = blinkRate + "ms";
+   }
+@@ -90,6 +90,7 @@ export class BlockCursorPlugin {
+   }
+ 
+   readPos(): Measure {
++    if (this.cm.getEditingView() !== this.view) return { cursors: [] };
+     let {state} = this.view
+     let cursors: Piece[] = []
+     for (let r of state.selection.ranges) {
+@@ -134,7 +135,7 @@ function configChanged(update: ViewUpdate) {
+     border: "none",
+     whiteSpace: "pre",
+   },
+-  "&:not(.cm-focused) .cm-fat-cursor": {
++  "&:not(.cm-focused) > .cm-scroller > .cm-vimCursorLayer .cm-fat-cursor": {
+     background: "none",
+     outline: "solid 1px #ff9696",
+     color: "transparent !important",
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index f96db4f..4cfba0d 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -113,10 +113,11 @@ function runHistoryCommand(cm: CodeMirror, revert: boolean) {
+   if (cm.curOp) {
+     cm.curOp.$changeStart = undefined;
+   }
++  const targetWasOwner = cm.getEditingView() === cm.cm6;
+   (revert ? undo : redo)(cm.cm6);
+   let changeStartIndex = cm.curOp?.$changeStart;
+   // vim mode expects the changed text to be either selected or cursor placed at the start
+-  if (changeStartIndex != null) {
++  if (targetWasOwner && cm.getEditingView() === cm.cm6 && changeStartIndex != null) {
+     cm.cm6.dispatch({ selection: { anchor: changeStartIndex } });
+   }
+ }
+@@ -142,8 +143,8 @@ export class CodeMirror {
+   static Pos = Pos;
+   static StringStream = StringStream as unknown as StringStream & { new(_: string): StringStream }
+   static commands = {
+-    toggleLineComment: function (cm: CodeMirror) { toggleLineComment(cm.cm6) },
+-    cursorCharLeft: function (cm: CodeMirror) { cursorCharLeft(cm.cm6); },
++    toggleLineComment: function (cm: CodeMirror) { toggleLineComment(cm.getEditingView()) },
++    cursorCharLeft: function (cm: CodeMirror) { cursorCharLeft(cm.getEditingView()); },
+     redo: function (cm: CodeMirror) { runHistoryCommand(cm, false); },
+     undo: function (cm: CodeMirror) { runHistoryCommand(cm, true); },
+     newlineAndIndent: function (cm: CodeMirror) {
+@@ -155,7 +156,7 @@ export class CodeMirror {
+       })
+     },
+     indentAuto: function (cm: CodeMirror) {
+-      indentSelection(cm.cm6)
++      indentSelection(cm.getEditingView())
+     },
+     newlineAndIndentContinueComment: undefined as any,
+     save: undefined as any,
+@@ -220,8 +221,14 @@ export class CodeMirror {
+   /** Map editor changes to logical input after bookmarks have been updated. */
+   changeTransformer?: (update: ViewUpdate, changes: RecordedChange[]) => RecordedChange[];
+   inputViewProvider?: () => EditorView;
++  /** The document being edited; cm6 remains the owner of history and the Vim session. */
++  editingViewProvider?: () => EditorView;
++  nativeInputHandler?: (key: string) => boolean;
++  private editingView: EditorView;
++  private targetUpdates = new WeakSet<ViewUpdate>();
+   constructor(cm6: EditorView) {
+     this.cm6 = cm6;
++    this.editingView = cm6;
+     this.onChange = this.onChange.bind(this);
+     this.onSelectionChange = this.onSelectionChange.bind(this);
+   };
+@@ -231,17 +238,17 @@ export class CodeMirror {
+   signal(type: string, e: any, handlers?: any) { signal(this, type, e, handlers) }
+ 
+   indexFromPos(pos: Pos) {
+-    return indexFromPos(this.cm6.state.doc, pos);
++    return indexFromPos(this.getEditingView().state.doc, pos);
+   };
+   posFromIndex(offset: number) {
+-    return posFromIndex(this.cm6.state.doc, offset);
++    return posFromIndex(this.getEditingView().state.doc, offset);
+   };
+ 
+ 
+   foldCode(pos: Pos) {
+-    let view = this.cm6
++    let view = this.getEditingView()
+     let ranges = view.state.selection.ranges
+-    let doc = this.cm6.state.doc
++    let doc = this.getEditingView().state.doc
+     let index = indexFromPos(doc, pos)
+     let tmpRanges = EditorSelection.create([EditorSelection.range(index, index)], 0).ranges;
+ 
+@@ -251,8 +258,8 @@ export class CodeMirror {
+   }
+ 
+   firstLine() { return 0; };
+-  lastLine() { return this.cm6.state.doc.lines - 1; };
+-  lineCount() { return this.cm6.state.doc.lines };
++  lastLine() { return this.getEditingView().state.doc.lines - 1; };
++  lineCount() { return this.getEditingView().state.doc.lines };
+   setCursor(line: number, ch: number): void;
+   setCursor(line: Pos): void;
+   setCursor(line: Pos | number, ch?: number) {
+@@ -260,13 +267,13 @@ export class CodeMirror {
+       ch = line.ch;
+       line = line.line;
+     }
+-    var offset = indexFromPos(this.cm6.state.doc, { line, ch: ch || 0 })
+-    this.cm6.dispatch({ selection: { anchor: offset } }, { scrollIntoView: !this.curOp })
++    var offset = indexFromPos(this.getEditingView().state.doc, { line, ch: ch || 0 })
++    this.getEditingView().dispatch({ selection: { anchor: offset } }, { scrollIntoView: !this.curOp })
+     if (this.curOp && !this.curOp.isVimOp)
+       this.onBeforeEndOperation();
+   };
+   getCursor(p?: "head" | "anchor" | "start" | "end"): Pos {
+-    var sel = this.cm6.state.selection.main;
++    var sel = this.getEditingView().state.selection.main;
+ 
+     var offset = p == "head" || !p
+       ? sel.head
+@@ -282,8 +289,8 @@ export class CodeMirror {
+   };
+ 
+   listSelections() {
+-    var doc = this.cm6.state.doc
+-    return this.cm6.state.selection.ranges.map(r => {
++    var doc = this.getEditingView().state.doc
++    return this.getEditingView().state.selection.ranges.map(r => {
+       return {
+         anchor: posFromIndex(doc, r.anchor),
+         head: posFromIndex(doc, r.head),
+@@ -291,7 +298,7 @@ export class CodeMirror {
+     });
+   };
+   setSelections(p: CM5RangeInterface[], primIndex?: number) {
+-    var doc = this.cm6.state.doc
++    var doc = this.getEditingView().state.doc
+     var ranges = p.map(x => {
+       var head = indexFromPos(doc, x.head)
+       var anchor = indexFromPos(doc, x.anchor)
+@@ -300,7 +307,7 @@ export class CodeMirror {
+         return EditorSelection.cursor(head, 1)
+       return EditorSelection.range(anchor, head)
+     })
+-    this.cm6.dispatch({
++    this.getEditingView().dispatch({
+       selection: EditorSelection.create(ranges, primIndex)
+     })
+   };
+@@ -311,9 +318,9 @@ export class CodeMirror {
+     }
+   };
+   getLine(row: number): string {
+-    var doc = this.cm6.state.doc
++    var doc = this.getEditingView().state.doc
+     if (row < 0 || row >= doc.lines) return "";
+-    return this.cm6.state.doc.line(row + 1).text;
++    return this.getEditingView().state.doc.line(row + 1).text;
+   };
+   getLineHandle(row: number) {
+     if (!this.$lineHandleChanges) this.$lineHandleChanges = [];
+@@ -335,26 +342,24 @@ export class CodeMirror {
+     this.$lineHandleChanges = undefined;
+   }
+   getRange(s: Pos, e: Pos) {
+-    var doc = this.cm6.state.doc;
+-    return this.cm6.state.sliceDoc(
++    var doc = this.getEditingView().state.doc;
++    return this.getEditingView().state.sliceDoc(
+       indexFromPos(doc, s),
+       indexFromPos(doc, e)
+     )
+   };
+   replaceRange(text: string, s: Pos, e?: Pos, source?: string) {
+-    if (this.state.lindvimeraTarget?.replaceRange?.(text, s, e)) return;
+     if (!e) e = s;
+-    var doc = this.cm6.state.doc;
++    var doc = this.getEditingView().state.doc;
+     var from = indexFromPos(doc, s);
+     var to = indexFromPos(doc, e);
+     dispatchChange(this, { changes: { from, to, insert: text } });
+   };
+   replaceSelection(text: string) {
+-    if (this.state.lindvimeraTarget?.replaceSelection?.(text)) return;
+-    dispatchChange(this, this.cm6.state.replaceSelection(text))
++    dispatchChange(this, this.getEditingView().state.replaceSelection(text))
+   };
+   replaceSelections(replacements: string[]) {
+-    var ranges = this.cm6.state.selection.ranges;
++    var ranges = this.getEditingView().state.selection.ranges;
+     var changes = ranges.map((r, i) => {
+       return { from: r.from, to: r.to, insert: replacements[i] || "" }
+     });
+@@ -364,21 +369,67 @@ export class CodeMirror {
+     return this.getSelections().join("\n");
+   };
+   getSelections() {
+-    var cm = this.cm6;
++    var cm = this.getEditingView();
+     return cm.state.selection.ranges.map(r => cm.state.sliceDoc(r.from, r.to))
+   };
+ 
+   somethingSelected() {
+-    return this.cm6.state.selection.ranges.some(r => !r.empty)
++    return this.getEditingView().state.selection.ranges.some(r => !r.empty)
++  };
++  getEditingView() {
++    return this.editingViewProvider?.() || this.cm6;
++  };
++  /** Refresh coordinates after a target switch, or retain them for a rebuilt same-cell view. */
++  refreshEditingTarget(preserveCoordinates = false) {
++    const previous = this.editingView;
++    const current = this.getEditingView();
++    this.editingView = current;
++    if (previous !== current) {
++      this.releaseLineHandles();
++      this.virtualSelection = null;
++      if (preserveCoordinates) {
++        for (const id in this.marks) {
++          const marker = this.marks[id];
++          if (marker.view === previous) marker.view = current;
++        }
++      } else {
++        this.$lastChangeEndOffset = current.state.selection.main.head;
++        const vim = this.state.vim;
++        if (vim) {
++          const cursor = this.getCursor();
++          vim.sel = { anchor: cursor, head: cursor };
++          vim.lastHPos = cursor.ch;
++          vim.lastHSPos = -1;
++          vim.lastMotion = null;
++          vim.lastSelection = null as any;
++          vim.lastPastedText = undefined;
++        }
++      }
++    }
++    signal(this, "vim-editing-target-change", current);
++  };
++  /** Feed native target updates into the single owner's Vim session once. */
++  updateEditingTarget(update: ViewUpdate) {
++    if (this.targetUpdates.has(update)) return;
++    this.targetUpdates.add(update);
++    if (update.view !== this.getEditingView()) {
++      if (update.docChanged) this.onChange(update);
++      return;
++    }
++    if (!update.docChanged && !update.selectionSet) return;
++    this.operation(() => {
++      if (update.docChanged) this.onChange(update);
++      if (update.selectionSet) this.onSelectionChange();
++    });
+   };
+   getInputView() {
+-    return this.inputViewProvider?.() || this.cm6;
++    return this.inputViewProvider?.() || this.getEditingView();
+   };
+   getInputField() {
+     return this.getInputView().contentDOM;
+   };
+   clipPos(p: Pos) {
+-    var doc = this.cm6.state.doc
++    var doc = this.getEditingView().state.doc
+     var ch = p.ch;
+     var lineNumber = p.line + 1;
+     if (lineNumber < 1) {
+@@ -396,10 +447,10 @@ export class CodeMirror {
+ 
+ 
+   getValue(): string {
+-    return this.cm6.state.doc.toString();
++    return this.getEditingView().state.doc.toString();
+   };
+   setValue(text: string) {
+-    var cm = this.cm6;
++    var cm = this.getEditingView();
+     return cm.dispatch({
+       changes: { from: 0, to: cm.state.doc.length, insert: text },
+       selection: EditorSelection.range(0, 0)
+@@ -407,17 +458,17 @@ export class CodeMirror {
+   };
+ 
+   focus() {
+-    return this.cm6.focus();
++    return this.getEditingView().focus();
+   };
+   blur() {
+-    return this.cm6.contentDOM.blur();
++    return this.getEditingView().contentDOM.blur();
+   };
+   defaultTextHeight() {
+-    return this.cm6.defaultLineHeight
++    return this.getEditingView().defaultLineHeight
+   };
+ 
+   findMatchingBracket(pos: Pos, _options?: any) {
+-    var state = this.cm6.state
++    var state = this.getEditingView().state
+     var offset = indexFromPos(state.doc, pos);
+     var m = matchBrackets(state, offset + 1, -1)
+     if (m && m.end) {
+@@ -440,21 +491,21 @@ export class CodeMirror {
+   };
+ 
+   indentMore() {
+-    indentMore(this.cm6);
++    indentMore(this.getEditingView());
+   };
+   indentLess() {
+-    indentLess(this.cm6);
++    indentLess(this.getEditingView());
+   };
+ 
+   execCommand(name: string) {
+     if (CodeMirror.commands.hasOwnProperty(name)) CodeMirror.commands[name](this);
+-    else if (name == "goLineLeft") cursorLineBoundaryBackward(this.cm6);
++    else if (name == "goLineLeft") cursorLineBoundaryBackward(this.getEditingView());
+     else if (name == "goLineRight") {
+-      cursorLineBoundaryForward(this.cm6);
+-      let state = this.cm6.state
++      cursorLineBoundaryForward(this.getEditingView());
++      let state = this.getEditingView().state
+       let cur = state.selection.main.head; 
+       if (cur < state.doc.length && state.sliceDoc(cur, cur + 1) !== "\n") {
+-        cursorCharBackward(this.cm6);
++        cursorCharBackward(this.getEditingView());
+       }
+     }
+     else console.log(name + " is not implemented");
+@@ -478,7 +529,7 @@ export class CodeMirror {
+       (cm6Query as any).forVim = true;
+       this.cm6Query = cm6Query;
+       let effect = setSearchQuery.of(cm6Query);
+-      this.cm6.dispatch({ effects: effect });
++      this.getEditingView().dispatch({ effects: effect });
+       return cm6Query
+     }
+   };
+@@ -486,7 +537,7 @@ export class CodeMirror {
+     if (!this.cm6Query) return
+     (this.cm6Query as any).forVim = false;
+     let effect = setSearchQuery.of(this.cm6Query);
+-    this.cm6.dispatch({ effects: effect });
++    this.getEditingView().dispatch({ effects: effect });
+   };
+ 
+   getSearchCursor(query: RegExp, pos: Pos) {
+@@ -498,7 +549,7 @@ export class CodeMirror {
+     var afterEmptyMatch = false;
+ 
+     if (pos.ch == undefined) pos.ch = Number.MAX_VALUE;
+-    var firstOffset = indexFromPos(cm.cm6.state.doc, pos);
++    var firstOffset = indexFromPos(cm.getEditingView().state.doc, pos);
+ 
+     var source = query.source.replace(/(\\.|{(?:\d+(?:,\d*)?|,\d+)})|[{}]/g, function (a, b) {
+       if (!b) return "\\" + a
+@@ -510,7 +561,7 @@ export class CodeMirror {
+     }
+ 
+     function nextMatch(from: number) {
+-      var doc = cm.cm6.state.doc
++      var doc = cm.getEditingView().state.doc
+       if (from > doc.length) return null;
+       let res = rCursor(doc, from).next()
+       return res.done ? null : res.value
+@@ -518,7 +569,7 @@ export class CodeMirror {
+ 
+     var ChunkSize = 10000
+     function prevMatchInRange(from: number, to: number) {
+-      var doc = cm.cm6.state.doc
++      var doc = cm.getEditingView().state.doc
+       for (let size = 1; ; size++) {
+         let start = Math.max(from, to - size * ChunkSize)
+         let cursor = rCursor(doc, start, to), range: CM6Result = null
+@@ -531,7 +582,7 @@ export class CodeMirror {
+       findNext: function () { return this.find(false) },
+       findPrevious: function () { return this.find(true) },
+       find: function (back?: boolean): string[] | null | undefined {
+-        var doc = cm.cm6.state.doc
++        var doc = cm.getEditingView().state.doc
+         if (back) {
+           let endAt = last ? (afterEmptyMatch ? last.to - 1 : last.from) : firstOffset
+           last = prevMatchInRange(0, endAt);
+@@ -556,7 +607,7 @@ export class CodeMirror {
+           });
+           last.to = last.from + text.length
+           if (lastCM5Result) {
+-            lastCM5Result.to = posFromIndex(cm.cm6.state.doc, last.to);
++            lastCM5Result.to = posFromIndex(cm.getEditingView().state.doc, last.to);
+           }
+         }
+       },
+@@ -566,7 +617,7 @@ export class CodeMirror {
+     };
+   };
+   findPosV(start: Pos, amount: number, unit: "page" | "line", goalColumn?: number) {
+-    let { cm6 } = this;
++    let cm6 = this.getEditingView();
+     const doc = cm6.state.doc;
+     let pixels = unit == 'page' ? cm6.dom.clientHeight : 0;
+ 
+@@ -601,21 +652,21 @@ export class CodeMirror {
+     return pos;
+   };
+   charCoords(pos: Pos, mode: "div" | "local") {
+-    var rect = this.cm6.contentDOM.getBoundingClientRect();
+-    var offset = indexFromPos(this.cm6.state.doc, pos)
+-    var coords = this.cm6.coordsAtPos(offset)
++    var rect = this.getEditingView().contentDOM.getBoundingClientRect();
++    var offset = indexFromPos(this.getEditingView().state.doc, pos)
++    var coords = this.getEditingView().coordsAtPos(offset)
+     var d = -rect.top
+     return { left: (coords?.left || 0) - rect.left, top: (coords?.top || 0) + d, bottom: (coords?.bottom || 0) + d }
+   };
+   coordsChar(coords: { left: number, top: number }, mode: "div" | "local") {
+-    var rect = this.cm6.contentDOM.getBoundingClientRect()
++    var rect = this.getEditingView().contentDOM.getBoundingClientRect()
+ 
+-    var offset = this.cm6.posAtCoords({ x: coords.left + rect.left, y: coords.top + rect.top }) || 0
+-    return posFromIndex(this.cm6.state.doc, offset)
++    var offset = this.getEditingView().posAtCoords({ x: coords.left + rect.left, y: coords.top + rect.top }) || 0
++    return posFromIndex(this.getEditingView().state.doc, offset)
+   };
+ 
+   getScrollInfo() {
+-    var scroller = this.cm6.scrollDOM
++    var scroller = this.getEditingView().scrollDOM
+     return {
+       left: scroller.scrollLeft, top: scroller.scrollTop,
+       height: scroller.scrollHeight,
+@@ -625,23 +676,23 @@ export class CodeMirror {
+   };
+   scrollTo(x?: number|null, y?: number|null) {
+     if (x != null)
+-      this.cm6.scrollDOM.scrollLeft = x
++      this.getEditingView().scrollDOM.scrollLeft = x
+     if (y != null)
+-      this.cm6.scrollDOM.scrollTop = y
++      this.getEditingView().scrollDOM.scrollTop = y
+   };
+   scrollIntoView(pos?: Pos, margin?: number) {
+     if (pos) {
+       var offset = this.indexFromPos(pos);
+-      this.cm6.dispatch({
++      this.getEditingView().dispatch({
+         effects: EditorView.scrollIntoView(offset)
+       });
+     } else {
+-      this.cm6.dispatch({ scrollIntoView: true, userEvent: "scroll" });
++      this.getEditingView().dispatch({ scrollIntoView: true, userEvent: "scroll" });
+     }
+   };
+ 
+   getWrapperElement() {
+-    return this.cm6.dom;
++    return this.getEditingView().dom;
+   };
+ 
+   // for tests
+@@ -649,12 +700,12 @@ export class CodeMirror {
+     return { name: this.getOption("mode") };
+   };
+   setSize(w: number, h: number) {
+-    this.cm6.dom.style.width = w + 4 + "px"
+-    this.cm6.dom.style.height = h + "px"
++    this.getEditingView().dom.style.width = w + 4 + "px"
++    this.getEditingView().dom.style.height = h + "px"
+     this.refresh()
+   }
+   refresh() {
+-    (this.cm6 as any).measure()
++    (this.getEditingView() as any).measure()
+   }
+ 
+   // event listeners
+@@ -668,13 +719,15 @@ export class CodeMirror {
+   $lastChangeEndOffset = 0;
+   $lineHandleChanges: undefined|ViewUpdate[]
+   onChange(update: ViewUpdate) {
++    for (const marker of Object.values(this.marks)) {
++      if (marker.view === update.view) marker.update(update.changes);
++    }
++    // Parent serialization mirrors native edits. Recording it would duplicate input
++    // and map cell coordinates through an unrelated Markdown document.
++    if (update.view !== this.getEditingView()) return;
+     if (this.$lineHandleChanges) {
+       this.$lineHandleChanges.push(update);
+     }
+-    for (let i in this.marks) {
+-      let m = this.marks[i];
+-      m.update(update.changes)
+-    }
+     if (this.virtualSelection) {
+       this.virtualSelection.ranges = this.virtualSelection.ranges.map(range => range.map(update.changes))
+     }
+@@ -765,10 +818,10 @@ export class CodeMirror {
+   getOption(name: string) {
+     switch (name) {
+       case "firstLineNumber": return 1;
+-      case "tabSize": return this.cm6.state.tabSize || 4;
+-      case "readOnly": return this.cm6.state.readOnly;
+-      case "indentWithTabs": return this.cm6.state.facet(indentUnit) == "\t"; // TODO
+-      case "indentUnit": return this.cm6.state.facet(indentUnit).length || 2;
++      case "tabSize": return this.getEditingView().state.tabSize || 4;
++      case "readOnly": return this.getEditingView().state.readOnly;
++      case "indentWithTabs": return this.getEditingView().state.facet(indentUnit) == "\t"; // TODO
++      case "indentUnit": return this.getEditingView().state.facet(indentUnit).length || 2;
+       case "textwidth": return this.state.textwidth;
+       // for tests
+       case "keyMap": return this.state.keyMap || "vim";
+@@ -780,7 +833,7 @@ export class CodeMirror {
+   getTokenTypeAt(pos: Pos) {
+     // only comment|string are needed
+     var offset = this.indexFromPos(pos)
+-    var tree = ensureSyntaxTree(this.cm6.state, offset)
++    var tree = ensureSyntaxTree(this.getEditingView().state, offset)
+     var node = tree?.resolve(offset)
+     var type = node?.type?.name || ""
+     if (/comment/i.test(type)) return "comment";
+@@ -789,8 +842,8 @@ export class CodeMirror {
+   };
+ 
+   overWriteSelection(text: string) {
+-    var doc = this.cm6.state.doc
+-    var sel = this.cm6.state.selection;
++    var doc = this.getEditingView().state.doc
++    var sel = this.getEditingView().state.selection;
+     var ranges = sel.ranges.map(x => {
+       if (x.empty) {
+         var ch = x.to < doc.length ? doc.sliceString(x.from, x.to + 1) : ""
+@@ -799,7 +852,7 @@ export class CodeMirror {
+       }
+       return x;
+     });
+-    this.cm6.dispatch({
++    this.getEditingView().dispatch({
+       selection: EditorSelection.create(ranges, sel.mainIndex)
+     })
+     this.replaceSelection(text)
+@@ -807,23 +860,23 @@ export class CodeMirror {
+ 
+   /*** multiselect ****/
+   isInMultiSelectMode() {
+-    return this.cm6.state.selection.ranges.length > 1
++    return this.getEditingView().state.selection.ranges.length > 1
+   }
+   virtualSelectionMode() {
+     return !!this.virtualSelection
+   }
+   virtualSelection: Mutable<EditorSelection> | null = null;
+   forEachSelection(command: Function) {
+-    var selection = this.cm6.state.selection;
++    var selection = this.getEditingView().state.selection;
+     this.virtualSelection = EditorSelection.create(selection.ranges, selection.mainIndex)
+     for (var i = 0; i < this.virtualSelection.ranges.length; i++) {
+       var range = this.virtualSelection.ranges[i]
+       if (!range) continue
+-      this.cm6.dispatch({ selection: EditorSelection.create([range]) });
++      this.getEditingView().dispatch({ selection: EditorSelection.create([range]) });
+       command();
+-      (this.virtualSelection as any).ranges[i] = this.cm6.state.selection.ranges[0]      
++      (this.virtualSelection as any).ranges[i] = this.getEditingView().state.selection.ranges[0]
+     }
+-    this.cm6.dispatch({ selection: this.virtualSelection })
++    this.getEditingView().dispatch({ selection: this.virtualSelection })
+     this.virtualSelection = null;
+   }
+ 
+@@ -1006,7 +1059,7 @@ function findMatchingTag(cm: CodeMirror, pos: Pos) {
+ }
+ 
+ function findEnclosingTag(cm: CodeMirror, pos: Pos) {
+-  var state = cm.cm6.state;
++  var state = cm.getEditingView().state;
+   var offset = cm.indexFromPos(pos);
+   if (offset < state.doc.length) {
+     var text = state.sliceDoc(offset, offset + 1)
+@@ -1042,9 +1095,11 @@ class Marker {
+   id: number;
+   offset: number | null;
+   assoc: number;
++  view: EditorView;
+ 
+   constructor(cm: CodeMirror, offset: number, assoc: number) {
+     this.cm = cm;
++    this.view = cm.getEditingView();
+     this.id = cm.$mid++;
+     this.offset = offset;
+     this.assoc = assoc;
+@@ -1052,8 +1107,8 @@ class Marker {
+   };
+   clear() { delete this.cm.marks[this.id] };
+   find(): Pos | null {
+-    if (this.offset == null) return null;
+-    return this.cm.posFromIndex(this.offset)
++    if (this.offset == null || this.view !== this.cm.getEditingView()) return null;
++    return posFromIndex(this.view.state.doc, Math.min(this.offset, this.view.state.doc.length))
+   };
+   update(change: ChangeDesc) {
+     if (this.offset != null)
+diff --git a/packages/codemirror-vim/src/index.ts b/packages/codemirror-vim/src/index.ts
+index 2a608b5..4ff9c19 100644
+--- a/packages/codemirror-vim/src/index.ts
++++ b/packages/codemirror-vim/src/index.ts
+@@ -3,6 +3,7 @@ import { CodeMirror } from "./cm_adapter";
+ import { BlockCursorPlugin, hideNativeSelection } from "./block-cursor";
+ import {
+   Extension,
++  EditorState,
+   StateField,
+   StateEffect,
+   RangeSetBuilder,
+@@ -13,6 +14,7 @@ import {
+   ViewUpdate,
+   Decoration,
+   EditorView,
++  drawSelection,
+   showPanel,
+   Panel,
+ } from "@codemirror/view";
+@@ -52,6 +54,7 @@ const vimPlugin = ViewPlugin.fromClass(
+     private dom: HTMLElement;
+     private statusButton: HTMLElement;
+     private spacer: HTMLElement;
++    private dialogView?: EditorView;
+     public view: EditorViewExtended;
+     public cm: CodeMirror;
+     public status = "";
+@@ -84,14 +87,20 @@ const vimPlugin = ViewPlugin.fromClass(
+         this.updateStatus();
+       });
+ 
++      this.cm.on("vim-editing-target-change", () => {
++        this.updateClass();
++        this.highlight(this.query);
++        this.blockCursor.scheduleRedraw();
++      });
+       this.cm.on("dialog", () => {
+-        if (this.cm.state.statusbar) {
++        const visible = !!this.cm.state.dialog;
++        const target = visible ? cm.getEditingView() : this.dialogView || cm.getEditingView();
++        if (this.cm.state.statusbar && target === view) {
+           this.updateStatus();
+-        } else {
+-          view.dispatch({
+-            effects: showVimPanel.of(!!this.cm.state.dialog),
+-          });
++        } else if (target.dom.isConnected) {
++          target.dispatch({ effects: showVimPanel.of(visible) });
+         }
++        this.dialogView = visible ? target : undefined;
+       });
+ 
+       this.dom = document.createElement("span");
+@@ -109,18 +118,7 @@ const vimPlugin = ViewPlugin.fromClass(
+       if ((update.viewportChanged || update.docChanged) && this.query) {
+         this.highlight(this.query);
+       }
+-      if (update.docChanged) {
+-        this.cm.onChange(update);
+-      }
+-      if (update.selectionSet) {
+-        this.cm.onSelectionChange();
+-      }
+-      if (update.viewportChanged) {
+-        // scroll
+-      }
+-      if (this.cm.curOp && !this.cm.curOp.isVimOp) {
+-        this.cm.onBeforeEndOperation();
+-      }
++      this.cm.updateEditingTarget(update);
+       if (update.transactions) {
+         for (let tr of update.transactions)
+           for (let effect of tr.effects) {
+@@ -140,7 +138,7 @@ const vimPlugin = ViewPlugin.fromClass(
+     }
+     updateClass() {
+       const state = this.cm.state;
+-      if (!state.vim || (state.vim.insertMode && !state.overwrite))
++      if (this.cm.getEditingView() !== this.view || !state.vim || (state.vim.insertMode && !state.overwrite))
+         this.view.scrollDOM.classList.remove("cm-vimMode");
+       else this.view.scrollDOM.classList.add("cm-vimMode");
+     }
+@@ -148,7 +146,7 @@ const vimPlugin = ViewPlugin.fromClass(
+       let dom = this.cm.state.statusbar;
+       let vim = this.cm.state.vim;
+       if (!dom || !vim) return;
+-      let dialog = this.cm.state.dialog;
++      let dialog = this.cm.getEditingView() === this.view ? this.cm.state.dialog : null;
+       if (dialog) {
+         if (dialog.parentElement != dom) {
+           dom.textContent = "";
+@@ -176,7 +174,7 @@ const vimPlugin = ViewPlugin.fromClass(
+ 
+     highlight(query: any) {
+       this.query = query;
+-      if (!query) return (this.decorations = Decoration.none);
++      if (!query || this.cm.getEditingView() !== this.view) return (this.decorations = Decoration.none);
+       let { view } = this;
+       let builder = new RangeSetBuilder<Decoration>();
+       for (
+@@ -201,8 +199,10 @@ const vimPlugin = ViewPlugin.fromClass(
+     query = null;
+     decorations = Decoration.none;
+     waitForCopy = false;
+-    handleKey(e: KeyboardEvent, view: EditorView) {
++    handleKey(e: KeyboardEvent, view: EditorView = this.view) {
++      if (e.defaultPrevented) return false;
+       const cm = this.cm;
++      if (cm.getEditingView() !== view) return false;
+       let vim = cm.state.vim;
+       if (!vim) return;
+ 
+@@ -225,7 +225,7 @@ const vimPlugin = ViewPlugin.fromClass(
+       }
+ 
+       let isCopy = key === "<C-c>" && !CodeMirror.isMac;
+-      if (isCopy && cm.somethingSelected()) {
++      if (isCopy && vim.insertMode && cm.somethingSelected()) {
+         this.waitForCopy = true;
+         return true;
+       }
+@@ -415,11 +415,11 @@ const vimPanelState = StateField.define<boolean>({
+   },
+ });
+ 
+-function createVimPanel(view: EditorView) {
++function createVimPanel(view: EditorView, owner?: CodeMirror | null) {
+   let dom = document.createElement("div");
+   dom.className = "cm-vim-panel";
+-  let cm = (view as EditorViewExtended).cm;
+-  if (cm.state.dialog) {
++  let cm = owner || (view as EditorViewExtended).cm;
++  if (cm?.state.dialog) {
+     dom.appendChild(cm.state.dialog);
+   }
+   return { top: false, dom };
+@@ -443,6 +443,70 @@ export function vim(options: { status?: boolean } = {}): Extension {
+   ];
+ }
+ 
++/** A native editing surface borrows the owner's Vim state without creating an engine. */
++export function vimTarget(owner: () => CodeMirror | null): Extension {
++  const panelState = StateField.define<boolean>({
++    create: () => false,
++    update(value, transaction) {
++      for (const effect of transaction.effects)
++        if (effect.is(showVimPanel)) value = effect.value;
++      return value;
++    },
++    provide: field => showPanel.from(field, visible => visible
++      ? view => createVimPanel(view, owner()) : null),
++  });
++  const target = ViewPlugin.fromClass(class implements PluginValue {
++    cm: CodeMirror | null;
++    cursor: BlockCursorPlugin | null;
++    decorations = Decoration.none;
++    redraw = () => {
++      const active = this.cm?.getEditingView() === this.view;
++      const state = this.cm?.state;
++      this.view.scrollDOM.classList.toggle("cm-vimMode", !!active && !!state?.vim
++        && (!state.vim.insertMode || !!state.overwrite));
++      this.highlight();
++      this.cursor?.scheduleRedraw();
++    };
++    constructor(readonly view: EditorView) {
++      this.cm = owner();
++      this.cursor = this.cm ? new BlockCursorPlugin(view, this.cm) : null;
++      this.cm?.on("vim-mode-change", this.redraw);
++      this.cm?.on("vim-command-done", this.redraw);
++      this.cm?.on("vim-editing-target-change", this.redraw);
++      this.redraw();
++    }
++    update(update: ViewUpdate) {
++      this.cm?.updateEditingTarget(update);
++      this.highlight();
++      this.cursor?.update(update);
++    }
++    highlight() {
++      const cm = this.cm;
++      const query = cm?.cm6Query;
++      if (!cm || cm.getEditingView() !== this.view || !(query as any)?.forVim) {
++        this.decorations = Decoration.none;
++        return;
++      }
++      const builder = new RangeSetBuilder<Decoration>();
++      const matcher = (query as any).create();
++      for (const { from, to } of this.view.visibleRanges) {
++        matcher.highlight(this.view.state, from, to, (from: number, to: number) => {
++          builder.add(from, to, matchMark);
++        });
++      }
++      this.decorations = builder.finish();
++    }
++    destroy() {
++      this.cm?.off("vim-mode-change", this.redraw);
++      this.cm?.off("vim-command-done", this.redraw);
++      this.cm?.off("vim-editing-target-change", this.redraw);
++      this.view.scrollDOM.classList.remove("cm-vimMode");
++      this.cursor?.destroy();
++    }
++  }, { decorations: value => value.decorations });
++  return [target, panelState, vimStyle, hideNativeSelection, drawSelection(), EditorState.allowMultipleSelections.of(true)];
++}
++
+ export { CodeMirror, Vim };
+ 
+ export function getCM(view: EditorView): CodeMirror | null {

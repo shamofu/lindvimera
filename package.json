@@ -1,0 +1,62 @@
+{
+  "name": "lindvimera",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lindvimera: Japanese-aware Vim editing for Obsidian",
+  "keywords": [
+    "budoux",
+    "obsidian",
+    "vim"
+  ],
+  "license": "MIT",
+  "author": "shamofu",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "prepare:vendor": "node scripts/prepare-vendor.mjs",
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "lint": "oxlint --deny-warnings .",
+    "lint:fix": "oxlint --fix .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "pnpm prepare:vendor && tsc -p .generated/codemirror-vim/packages/codemirror-vim-core/tsconfig.json --noCheck && tsc -p tsconfig.vendor.json && tsc -p tsconfig.json",
+    "test": "pnpm test:unit",
+    "test:unit": "pnpm prepare:vendor && vitest run",
+    "test:e2e": "node scripts/probe/ci.mjs",
+    "probe": "node scripts/probe/run.mjs",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm test:unit && pnpm build"
+  },
+  "dependencies": {
+    "budoux": "0.9.2",
+    "lindera-wasm": "6.0.0"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "6.8.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/search": "6.7.2",
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
+    "@lezer/common": "1.5.2",
+    "@types/node": "^24.10.1",
+    "esbuild": "0.28.2",
+    "jsdom": "30.1.0",
+    "obsidian": "1.13.1",
+    "oxfmt": "0.68.0",
+    "oxlint": "1.83.0",
+    "playwright-core": "1.63.0",
+    "typescript": "5.9.3",
+    "vitest": "5.0.1"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.2",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "packageManager": "pnpm@12.4.2"
+}

@@ -1,0 +1,120 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 3cafa6b..f145007 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -59,6 +59,8 @@ export function initVim(CM) {
+ 
+   /** @arg {CodeMirror} cm @arg {Pos} curStart @arg {Pos} curEnd */
+   function updateSelectionForSurrogateCharacters(cm, curStart, curEnd) {
++    // The provider handles complete graphemes when inclusive ranges are made.
++    if (cm.state.wordBoundaryProvider) return {start: curStart, end: curEnd};
+     // start and character position when no selection 
+     // is the same in visual mode, and differs in 1 character in normal mode
+     if (curStart.line === curEnd.line && curStart.ch >= curEnd.ch - 1) {
+@@ -2495,6 +2497,9 @@ export function initVim(CM) {
+       return curEnd;
+     },
+     moveByWords: function(cm, head, motionArgs) {
++      if (!motionArgs.bigWord && cm.state.wordBoundaryProvider) {
++        return cm.state.wordBoundaryProvider.move(cm, head, motionArgs);
++      }
+       return moveToWord(cm, head, motionArgs.repeat, !!motionArgs.forward,
+           !!motionArgs.wordEnd, !!motionArgs.bigWord);
+     },
+@@ -3575,6 +3580,14 @@ export function initVim(CM) {
+     var text = cm.getLine(line);
+     var maxCh = text.length - 1 + Number(!!includeLineBreak);
+     var ch = Math.min(Math.max(0, cur.ch), maxCh);
++    if (cm.state.wordBoundaryProvider) {
++      var clipped = cm.state.wordBoundaryProvider.character(cm, new Pos(line, ch), 0);
++      if (oldCur && oldCur.line == line && oldCur.ch < ch && clipped.ch < ch) {
++        var next = cm.state.wordBoundaryProvider.character(cm, clipped, 1);
++        if (next.ch <= maxCh) return next;
++      }
++      return clipped;
++    }
+     // prevent cursor from entering surrogate pair
+     var charCode = text.charCodeAt(ch);
+     if (0xDC00 <= charCode && charCode <= 0xDFFF) {
+@@ -3854,7 +3867,9 @@ export function initVim(CM) {
+     } else {
+       anchor = cursorMin(start, anchor);
+       head = cursorMax(head, end);
+-      head = offsetCursor(head, 0, -1);
++      head = cm.state.wordBoundaryProvider && head.ch > 0
++        ? cm.state.wordBoundaryProvider.character(cm, head, -1)
++        : offsetCursor(head, 0, -1);
+       if (head.ch == -1 && head.line != cm.firstLine()) {
+         head = new Pos(head.line - 1, lineLength(cm, head.line - 1));
+       }
+@@ -3889,8 +3904,18 @@ export function initVim(CM) {
+     if (mode == 'char') {
+       var headOffset = !exclusive && !cursorIsBefore(sel.head, sel.anchor) ? 1 : 0;
+       var anchorOffset = cursorIsBefore(sel.head, sel.anchor) ? 1 : 0;
+-      head = offsetCursor(sel.head, 0, headOffset);
+-      anchor = offsetCursor(sel.anchor, 0, anchorOffset);
++      var provider = cm.state.wordBoundaryProvider;
++      head = provider ? provider.character(cm, sel.head, headOffset ? 1 : 0)
++        : offsetCursor(sel.head, 0, headOffset);
++      anchor = provider ? provider.character(cm, sel.anchor, anchorOffset ? 1 : 0)
++        : offsetCursor(sel.anchor, 0, anchorOffset);
++      if (!provider) {
++        // Inclusive endpoints must include the low surrogate even without a policy.
++        var headCode = (cm.getLine(head.line) || '').charCodeAt(head.ch);
++        var anchorCode = (cm.getLine(anchor.line) || '').charCodeAt(anchor.ch);
++        if (headOffset && headCode >= 0xDC00 && headCode <= 0xDFFF) head.ch++;
++        if (anchorOffset && anchorCode >= 0xDC00 && anchorCode <= 0xDFFF) anchor.ch++;
++      }
+       return {
+         ranges: [{anchor: anchor, head: head}],
+         primary: 0
+@@ -4025,6 +4050,11 @@ export function initVim(CM) {
+    **/
+   function expandWordUnderCursor(cm, {inclusive, innerWord, bigWord, noSymbol, multiline}, cursor) {
+     var cur = cursor || getHead(cm);
++    // Search (* and #) deliberately retains the built-in keyword rules.
++    if (multiline && !bigWord && cm.state.wordBoundaryProvider) {
++      var wordHead = cursor || (cm.state.vim.visualMode ? cm.state.vim.sel.head : cur);
++      return cm.state.wordBoundaryProvider.expand(cm, wordHead, {inclusive, innerWord});
++    }
+     var line = cm.getLine(cur.line);
+     var endLine = line;
+     var startLineNumber = cur.line
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index fbf98a6..85a007b 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -425,6 +425,13 @@ declare global {
+  * interface; @replit/codemirror-vim's adapter implements it on top of
+  * CM5EditorInterface 6, and cm5-vim binds it to a real CM5EditorInterface 5 instance.
+  */
++/** Optional per-editor plain-text boundary policy. Offsets are UTF-16. */
++export interface WordBoundaryProvider {
++    move(cm: CM5EditorInterface, cursor: Pos, args: MotionArgs): Pos
++    expand(cm: CM5EditorInterface, cursor: Pos, options: {inclusive?: boolean, innerWord?: boolean}): {start: Pos, end: Pos} | null
++    character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
++}
++
+ export interface CM5EditorInterface {
+     state: {
+         statusbar?: Element | null
+@@ -436,6 +443,7 @@ export interface CM5EditorInterface {
+         keyMap?: string
+         overwrite?: boolean
+         textwidth?: number
++        wordBoundaryProvider?: WordBoundaryProvider
+     }
+     marks: Record<string, Marker>
+     $mid: number
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 464f0db..3cb50b0 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -201,6 +201,7 @@ export class CodeMirror {
+     keyMap?: string,
+     overwrite?: boolean,
+     textwidth?: number,
++    wordBoundaryProvider?: import('@replit/codemirror-vim-core').WordBoundaryProvider,
+   } = {};
+   marks: Record<string, Marker> = Object.create(null);
+   $mid = 0; // marker id counter

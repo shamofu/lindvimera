@@ -1,0 +1,9 @@
+{
+  "id": "lindvimera",
+  "name": "Lindvimera",
+  "version": "0.1.0",
+  "minAppVersion": "1.13.7",
+  "description": "Japanese-aware Vim editing for Obsidian.",
+  "author": "shamofu",
+  "isDesktopOnly": true
+}

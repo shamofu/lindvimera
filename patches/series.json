@@ -1,0 +1,53 @@
+{
+  "baseCommit": "8640966b6977f84d2197e6adfd521fb737184587",
+  "sourceDirectory": "codemirror-vim",
+  "patches": [
+    {
+      "file": "0001-word-boundaries.patch",
+      "purpose": "Per-editor word boundary and grapheme policy for lowercase Vim motions and text objects",
+      "tests": ["test/word/provider.test.ts", "test/word/engine.test.ts"]
+    },
+    {
+      "file": "0002-markdown-hooks.patch",
+      "purpose": "Conditional per-editor mappings and operator continuations with replayable arguments",
+      "tests": ["test/markdown/engine.test.ts"]
+    },
+    {
+      "file": "0003-table-adapter.patch",
+      "purpose": "Delegate editor targets while retaining shared Vim counts, operators, registers and replay",
+      "tests": ["test/table/session.test.ts"]
+    },
+    {
+      "file": "0004-operation-recording.patch",
+      "purpose": "Notify host operation groups, map logical changes and route native input surfaces without a second Vim session",
+      "tests": ["test/runtime/history.test.ts", "test/runtime/editor.test.ts"]
+    },
+    {
+      "file": "0005-editing-target.patch",
+      "purpose": "One Vim session and parent history with cell-local editing buffers, native cursor/search surfaces and replayable Insert navigation",
+      "tests": [
+        "test/runtime/target.test.ts",
+        "test/table/session.test.ts",
+        "test/runtime/history.test.ts"
+      ]
+    },
+    {
+      "file": "0006-word-objects.patch",
+      "purpose": "Counted word objects and bidirectional Visual expansion share one provider and one endpoint conversion",
+      "tests": [
+        "test/word/provider.test.ts",
+        "test/word/engine.test.ts",
+        "test/word/native-objects.test.ts"
+      ]
+    },
+    {
+      "file": "0007-input-policy.patch",
+      "purpose": "Per-editor supported commands, guarded replay, one physical key dispatch and end-of-line range clipping",
+      "tests": [
+        "test/input/policy.test.ts",
+        "test/input/operation-coverage.test.ts",
+        "test/runtime/routing.test.ts"
+      ]
+    }
+  ]
+}

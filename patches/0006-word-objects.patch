@@ -1,0 +1,101 @@
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index 938838a..568e0d2 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -434,7 +434,7 @@ declare global {
+ /** Optional per-editor plain-text boundary policy. Offsets are UTF-16. */
+ export interface WordBoundaryProvider {
+     move(cm: CM5EditorInterface, cursor: Pos, args: MotionArgs): Pos
+-    expand(cm: CM5EditorInterface, cursor: Pos, options: {inclusive?: boolean, innerWord?: boolean}): {start: Pos, end: Pos} | null
++    expand(cm: CM5EditorInterface, cursor: Pos, options: {inclusive?: boolean, innerWord?: boolean, repeat?: number, bigWord?: boolean, visualSelection?: {anchor: Pos, head: Pos}}): {start: Pos, end: Pos} | null
+     character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
+ }
+ 
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index c12114e..bb6a9e3 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -2709,6 +2709,34 @@ export function initVim(CM) {
+         move = true;
+         tmp = findBeginningAndEnd(cm, head, character, inclusive);
+       } else if (character === 'W' || character === 'w') {
++        if (cm.state.wordBoundaryProvider) {
++          var provider = cm.state.wordBoundaryProvider;
++          var selection = vim.visualMode ? vim.sel : undefined;
++          var range = provider.expand(cm, selection ? selection.head : head, {
++            inclusive, innerWord: !inclusive, bigWord: character === 'W',
++            repeat: motionArgs.repeat || 1, visualSelection: selection
++          });
++          if (!range) return null;
++          if (!selection) {
++            if (range.start.line < range.end.line &&
++                !/\S/.test(cm.getLine(range.start.line).slice(0, range.start.ch)) &&
++                (!range.end.ch || !/\S/.test(cm.getLine(range.end.line).slice(range.end.ch)))) {
++              motionArgs.linewise = true;
++              if (!range.end.ch) range.end = new Pos(range.end.line - 1, 0);
++            }
++            return [range.start, range.end];
++          }
++          // The policy returns the complete half-open range. Convert its final
++          // endpoint exactly once, preserving the direction of Visual selection.
++          var end = range.end.ch > lineLength(cm, range.end.line)
++            ? new Pos(range.end.line, lineLength(cm, range.end.line))
++            : range.end.ch > 0 ? provider.character(cm, range.end, -1)
++            : range.end.line > cm.firstLine()
++              ? new Pos(range.end.line - 1, lineLength(cm, range.end.line - 1))
++              : range.end;
++          return cursorIsBefore(selection.head, selection.anchor)
++            ? [end, range.start] : [range.start, end];
++        }
+         var repeat = motionArgs.repeat || 1;
+         while (repeat-- > 0) {
+           var repeated = expandWordUnderCursor(cm, {
+@@ -2846,18 +2874,12 @@ export function initVim(CM) {
+       if (!vim.visualBlock) {
+         var anchor = ranges[0].anchor,
+             head = ranges[0].head;
+-        if (args.linewise &&
+-            head.line != cm.firstLine() &&
+-            anchor.line == cm.lastLine() &&
+-            anchor.line == head.line - 1) {
+-          // Special case for dd on last line (and first line).
+-          if (anchor.line == cm.firstLine()) {
+-            anchor.ch = 0;
+-          } else {
+-            anchor = new Pos(anchor.line - 1, lineLength(cm, anchor.line - 1));
+-          }
+-        }
++        // Capture the register before consuming the preceding newline when a
++        // linewise deletion reaches EOF, including selections spanning lines.
+         text = cm.getRange(anchor, head);
++        if (args.linewise && head.line > cm.lastLine() && anchor.line > cm.firstLine()) {
++          anchor = new Pos(anchor.line - 1, lineLength(cm, anchor.line - 1));
++        }
+         cm.replaceRange('', anchor, head);
+         finalHead = anchor;
+         if (args.linewise) {
+@@ -3990,6 +4012,12 @@ export function initVim(CM) {
+         : offsetCursor(sel.head, 0, headOffset);
+       anchor = provider ? provider.character(cm, sel.anchor, anchorOffset ? 1 : 0)
+         : offsetCursor(sel.anchor, 0, anchorOffset);
++      if (provider) {
++        if (headOffset && head.ch > lineLength(cm, head.line) && head.line < cm.lastLine())
++          head = new Pos(head.line + 1, 0);
++        if (anchorOffset && anchor.ch > lineLength(cm, anchor.line) && anchor.line < cm.lastLine())
++          anchor = new Pos(anchor.line + 1, 0);
++      }
+       if (!provider) {
+         // Inclusive endpoints must include the low surrogate even without a policy.
+         var headCode = (cm.getLine(head.line) || '').charCodeAt(head.ch);
+@@ -4131,11 +4159,6 @@ export function initVim(CM) {
+    **/
+   function expandWordUnderCursor(cm, {inclusive, innerWord, bigWord, noSymbol, multiline}, cursor) {
+     var cur = cursor || getHead(cm);
+-    // Search (* and #) deliberately retains the built-in keyword rules.
+-    if (multiline && !bigWord && cm.state.wordBoundaryProvider) {
+-      var wordHead = cursor || (cm.state.vim.visualMode ? cm.state.vim.sel.head : cur);
+-      return cm.state.wordBoundaryProvider.expand(cm, wordHead, {inclusive, innerWord});
+-    }
+     var line = cm.getLine(cur.line);
+     var endLine = line;
+     var startLineNumber = cur.line

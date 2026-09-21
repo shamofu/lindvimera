@@ -1,0 +1,13 @@
+{
+  "extends": "./.generated/codemirror-vim/packages/codemirror-vim/tsconfig.json",
+  "compilerOptions": {
+    "types": [],
+    "typeRoots": [],
+    "noCheck": true,
+    "paths": {
+      "@replit/codemirror-vim-core": [
+        "./.generated/codemirror-vim/packages/codemirror-vim-core/main.d.ts"
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error" },
+  "plugins": ["typescript", "unicorn", "oxc"],
+  "env": { "browser": true, "node": true, "es2022": true },
+  "ignorePatterns": [
+    "codemirror-vim/**",
+    ".generated/**",
+    ".cache/**",
+    ".test-vault/**",
+    ".test-runtime/**",
+    "node_modules/**",
+    "coverage/**",
+    "dist/**",
+    ".release/**",
+    ".release-gate/**",
+    "test-results/**",
+    "patches/**",
+    "test/fixtures/**"
+  ]
+}

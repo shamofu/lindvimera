@@ -1,0 +1,269 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 8ebf296..b467ad1 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -965,6 +965,11 @@ export function initVim(CM) {
+       }
+     },
+     multiSelectHandleKey: multiSelectHandleKey,
++    /** Clear an unfinished command without leaving the current editing mode. */
++    cancelPendingInput: function(cm) {
++      clearInputState(cm);
++      maybeInitVimState(cm).expectLiteralNext = false;
++    },
+ 
+     /**
+      * This is the outermost function called by CodeMirror, after keys have
+@@ -980,6 +985,10 @@ export function initVim(CM) {
+     findKey: function(cm_, key, origin) {
+       var vim = maybeInitVimState(cm_);
+       var cm = /**@type {CodeMirrorV}*/(cm_);
++      var policy = cm.state.commandPolicy;
++      if (policy && origin != 'mapping' && origin != 'macro') policy.rejected = false;
++      var hadPendingInput = !!(vim.inputState.keyBuffer.length || vim.inputState.operator ||
++        vim.inputState.getRepeat() || vim.inputState.registerName);
+ 
+       function handleMacroRecording() {
+         var macroModeState = vimGlobalState.macroModeState;
+@@ -1097,6 +1106,10 @@ export function initVim(CM) {
+         : handleKeyNonInsertMode();
+ 
+       if (command === false) {
++        if (policy) {
++          if (!vim.insertMode && key != '<Esc>' && (origin == 'mapping' || origin == 'macro')) rejectCommand(cm, key);
++          return !vim.insertMode && (key == '<Esc>' || hadPendingInput && !/^<(?:[CSMA]-)+/.test(key)) ? function() { return true; } : undefined;
++        }
+         return !vim.insertMode && (key.length === 1 || (CM.isMac && /<A-.>/.test(key)))? function() { return true; } : undefined;
+       } else if (command === true) {
+         // TODO: Look into using CodeMirror's multi-key handling.
+@@ -1110,6 +1123,10 @@ export function initVim(CM) {
+             cm.curOp.isVimOp = true;
+             try {
+               if (typeof command != 'object') return;
++              if (policy && !policy.allows(command, command.context || (vim.insertMode ? 'insert' : vim.visualMode ? 'visual' : vim.inputState.operator ? 'operatorPending' : 'normal'), command.keys)) {
++                rejectCommand(cm, command.keys);
++                return true;
++              }
+               
+               if (command.type == 'keyToKey') {
+                 doKeyToKey(cm, command.toKeys, command);
+@@ -1148,6 +1165,17 @@ export function initVim(CM) {
+     exitInsertMode: exitInsertMode
+   };
+ 
++  /** @arg {CodeMirror} cm @arg {string} keys */
++  function rejectCommand(cm, keys) {
++    var policy = cm.state.commandPolicy;
++    clearInputState(cm);
++    maybeInitVimState(cm).expectLiteralNext = false;
++    if (policy && !policy.rejected) {
++      policy.rejected = true;
++      policy.onRejected(keys);
++    }
++  }
++
+   var keyToKeyStack = [];
+   var noremap = false;
+   /**@type {undefined | null | import("./types").PromptOptions} */
+@@ -1214,7 +1242,7 @@ export function initVim(CM) {
+ 
+     try {
+       var vim = maybeInitVimState(cm);
+-      var keyRe = /<(?:[CSMA]-)*\w+>|./gi;
++      var keyRe = /<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu;
+ 
+       var match;
+       // Pull off one command key, which is either a single character
+@@ -1228,6 +1256,7 @@ export function initVim(CM) {
+         }
+ 
+         var result = vimApi.handleKey(cm, key, 'mapping');
++        if (cm.state.commandPolicy?.rejected) break;
+ 
+         if (!result && wasInsert && vim.insertMode) {
+           if (key[0] == "<") {
+@@ -3134,6 +3163,7 @@ export function initVim(CM) {
+       }
+       while(repeat--){
+         executeMacroRegister(cm, vim, macroModeState, registerName);
++        if (cm.state.commandPolicy?.rejected) break;
+       }
+     },
+     enterMacroRecordMode: function(cm, actionArgs) {
+@@ -3741,6 +3771,7 @@ export function initVim(CM) {
+     for (var i = startIndex; i < keyMap.length; i++) {
+       var command = keyMap[i];
+       if (command.when && !command.when(cm)) continue;
++      if (cm.state.commandPolicy && !cm.state.commandPolicy.allows(command, context, keys)) continue;
+       if (context == 'insert' && command.context != 'insert' ||
+           (command.context && command.context != context) ||
+           inputState.operator && command.type == 'action' && !command.cancelPendingOperator ||
+@@ -4008,9 +4039,9 @@ export function initVim(CM) {
+       var headOffset = !exclusive && !cursorIsBefore(sel.head, sel.anchor) ? 1 : 0;
+       var anchorOffset = cursorIsBefore(sel.head, sel.anchor) ? 1 : 0;
+       var provider = cm.state.wordBoundaryProvider;
+-      head = provider ? provider.character(cm, sel.head, headOffset ? 1 : 0)
++      head = provider ? sel.head.ch === Infinity ? cm.clipPos(sel.head) : provider.character(cm, sel.head, headOffset ? 1 : 0)
+         : offsetCursor(sel.head, 0, headOffset);
+-      anchor = provider ? provider.character(cm, sel.anchor, anchorOffset ? 1 : 0)
++      anchor = provider ? sel.anchor.ch === Infinity ? cm.clipPos(sel.anchor) : provider.character(cm, sel.anchor, anchorOffset ? 1 : 0)
+         : offsetCursor(sel.anchor, 0, anchorOffset);
+       if (provider) {
+         if (headOffset && head.ch > lineLength(cm, head.line) && head.line < cm.lastLine())
+@@ -5745,6 +5776,7 @@ export function initVim(CM) {
+      * @arg {{ callback: () => void; } | undefined} [opt_params]
+      */
+     processCommand(cm, input, opt_params) {
++      if (cm.state.commandPolicy) { rejectCommand(cm, ':' + input); return; }
+       var that = this;
+       cm.operation(function () {
+         if (cm.curOp) cm.curOp.isVimOp = true;
+@@ -6916,12 +6948,16 @@ export function initVim(CM) {
+     for (var i = 0; i < keyBuffer.length; i++) {
+       var text = keyBuffer[i];
+       var match, key;
+-      var keyRe = /<(?:[CSMA]-)*\w+>|./gi;
++      var keyRe = /<(?:[CSMA]-)*(?:\w+|[^\s<>])>|./gu;
+       while ((match = keyRe.exec(text))) {
+         // Pull off one command key, which is either a single character
+         // or a special sequence wrapped in '<' and '>', e.g. '<Space>'.
+         key = match[0];
+         vimApi.handleKey(cm, key, 'macro');
++        if (cm.state.commandPolicy?.rejected) {
++          macroModeState.isPlaying = false;
++          return;
++        }
+         if (vim.insertMode) {
+           var changes = register.insertModeChanges[imc++].changes;
+           vimGlobalState.macroModeState.lastInsertModeChanges.changes = changes;
+@@ -7107,6 +7143,10 @@ export function initVim(CM) {
+    * @arg {boolean} repeatForInsert
+    */
+   function repeatLastEdit(cm, vim, repeat, repeatForInsert) {
++    if (cm.state.commandPolicy && !cm.state.commandPolicy.allowsReplay(vim.lastEditInputState, vim.lastEditActionCommand)) {
++      rejectCommand(cm, '.');
++      return;
++    }
+     var macroModeState = vimGlobalState.macroModeState;
+     macroModeState.isPlaying = true;
+     var lastAction = vim.lastEditActionCommand;
+diff --git a/packages/codemirror-vim-core/types.ts b/packages/codemirror-vim-core/types.ts
+index 568e0d2..f4bfae5 100644
+--- a/packages/codemirror-vim-core/types.ts
++++ b/packages/codemirror-vim-core/types.ts
+@@ -438,6 +438,13 @@ export interface WordBoundaryProvider {
+     character(cm: CM5EditorInterface, cursor: Pos, direction: -1 | 0 | 1): Pos
+ }
+ 
++export interface CommandPolicy {
++    allows(command: vimKey, context: string, keys: string): boolean
++    allowsReplay(input: InputStateInterface | void, action: actionCommand | void): boolean
++    onRejected(keys: string): void
++    rejected?: boolean
++}
++
+ export interface CM5EditorInterface {
+     /** Replay a host-native Insert navigation command when available. */
+     nativeInputHandler?: (key: string) => boolean
+@@ -452,6 +459,7 @@ export interface CM5EditorInterface {
+         overwrite?: boolean
+         textwidth?: number
+         wordBoundaryProvider?: WordBoundaryProvider
++        commandPolicy?: CommandPolicy
+     }
+     marks: Record<string, Marker>
+     $mid: number
+diff --git a/packages/codemirror-vim/src/index.ts b/packages/codemirror-vim/src/index.ts
+index 4ff9c19..f2168c5 100644
+--- a/packages/codemirror-vim/src/index.ts
++++ b/packages/codemirror-vim/src/index.ts
+@@ -26,6 +26,34 @@ var FIREFOX_LINUX = typeof navigator != "undefined"
+ 
+ const Vim = initVim(CodeMirror);
+ 
++export type VimKeyEventResult = 'handled' | 'native' | 'unhandled';
++const keyEventResults = new WeakMap<KeyboardEvent, Map<CodeMirror, VimKeyEventResult>>();
++
++/** Mark an event owned by a host UI before the later CodeMirror DOM handler. */
++export function skipVimKeyEvent(cm: CodeMirror, event: KeyboardEvent): void {
++  let results = keyEventResults.get(event);
++  if (!results) keyEventResults.set(event, results = new Map());
++  results.set(cm, 'native');
++}
++
++/** One physical event makes at most one Vim attempt, including unhandled keys. */
++export function dispatchVimKeyEvent(cm: CodeMirror, event: KeyboardEvent, view = cm.getEditingView()): VimKeyEventResult {
++  let results = keyEventResults.get(event);
++  if (!results) keyEventResults.set(event, results = new Map());
++  const previous = results.get(cm);
++  if (previous) return previous;
++  results.set(cm, 'unhandled');
++  const plugin = cm.state.vimPlugin;
++  if (!plugin || event.defaultPrevented || cm.getEditingView() !== view) return 'unhandled';
++  CodeMirror.signal(cm, 'inputEvent', event);
++  plugin.lastKeydown = event.key;
++  plugin.useNextTextInput = event.isComposing || ['Unidentified', 'Process', 'Dead'].includes(event.key);
++  const handled = !plugin.useNextTextInput && cm.operation(() => plugin.handleKey(event, view));
++  const result = handled ? 'handled' : cm.state.vim?.insertMode || plugin.useNextTextInput ? 'native' : 'unhandled';
++  results.set(cm, result);
++  return result;
++}
++
+ const HighlightMargin = 250;
+ 
+ const vimStyle = EditorView.baseTheme({
+@@ -225,7 +253,7 @@ const vimPlugin = ViewPlugin.fromClass(
+       }
+ 
+       let isCopy = key === "<C-c>" && !CodeMirror.isMac;
+-      if (isCopy && vim.insertMode && cm.somethingSelected()) {
++      if (isCopy && vim.insertMode && cm.somethingSelected() && !cm.state.commandPolicy) {
+         this.waitForCopy = true;
+         return true;
+       }
+@@ -236,7 +264,7 @@ const vimPlugin = ViewPlugin.fromClass(
+ 
+       // insert mode
+       if (!result && vim.insertMode && cm.state.overwrite) {
+-        if (e.key && e.key.length == 1 && !/\n/.test(e.key)) {
++        if (e.key && e.key.length == 1 && !/\n/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+           result = true;
+           cm.overWriteSelection(e.key);
+         } else if (e.key == "Backspace") {
+@@ -294,18 +322,7 @@ const vimPlugin = ViewPlugin.fromClass(
+           this.handleKey(e, view);
+       },
+       keydown: function(e: KeyboardEvent, view: EditorView) {
+-        CodeMirror.signal(this.cm, 'inputEvent', e);
+-        this.lastKeydown = e.key;
+-        if (
+-          this.lastKeydown == "Unidentified"
+-          || this.lastKeydown == "Process"
+-          || this.lastKeydown == "Dead"
+-        ) {
+-          this.useNextTextInput = true;
+-        } else {
+-          this.useNextTextInput = false;
+-          this.handleKey(e, view);
+-        }
++        return dispatchVimKeyEvent(this.cm, e, view) === 'handled';
+       },
+     },
+     provide: () => {
+@@ -512,4 +529,3 @@ export { CodeMirror, Vim };
+ export function getCM(view: EditorView): CodeMirror | null {
+   return (view as EditorViewExtended).cm || null;
+ }
+-
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 3dc5110..420fcd0 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -210,6 +210,7 @@ export class CodeMirror {
+     textwidth?: number,
+     lindvimeraTarget?: any,
+     wordBoundaryProvider?: import('@replit/codemirror-vim-core').WordBoundaryProvider,
++    commandPolicy?: import('@replit/codemirror-vim-core').CommandPolicy,
+   } = {};
+   marks: Record<string, Marker> = Object.create(null);
+   $mid = 0; // marker id counter

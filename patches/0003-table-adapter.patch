@@ -1,0 +1,59 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 573a18d..904b7f3 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -1749,6 +1749,11 @@ export function initVim(CM) {
+       if (command.isEdit) {
+         this.recordLastEdit(vim, inputState, command);
+       }
++      // Host editing targets may preserve their own structure and input surface.
++      if (cm.state.lindvimeraTarget?.action?.(command.action, actionArgs, vim, {
++        enterInsert: function(head) { actions.enterInsertMode(cm, {head: head, repeat: actionArgs.repeat}, vim); },
++        exitVisual: function() { if (vim.visualMode) exitVisualMode(cm, false); }
++      })) return;
+       actions[command.action](cm, actionArgs, vim);
+     },
+     /** @arg {CodeMirrorV} cm @arg {vimState} vim @arg {import("./types").searchCommand} command*/
+@@ -2046,6 +2051,14 @@ export function initVim(CM) {
+       }
+       motionArgs.repeat = repeat;
+       clearInputState(cm);
++      // Preserve upstream parsing, counts, recording and dot replay before delegation.
++      if (cm.state.lindvimeraTarget?.evaluateInput?.({
++        inputState, motion, motionArgs, operator, operatorArgs, repeat, registerName, origHead, origAnchor
++      }, {
++        defaultMotion: function() { return motion && motions[motion](cm, origHead, motionArgs, vim, inputState); },
++        enterInsert: function(head) { actions.enterInsertMode(cm, {head: head}, vim); },
++        exitVisual: function() { if (vim.visualMode) exitVisualMode(cm, false); }
++      })) return;
+       if (motion) {
+         var motionResult = motions[motion](cm, origHead, motionArgs, vim, inputState);
+         vim.lastMotion = motions[motion];
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 3cb50b0..aabc2dc 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -201,6 +201,7 @@ export class CodeMirror {
+     keyMap?: string,
+     overwrite?: boolean,
+     textwidth?: number,
++    lindvimeraTarget?: any,
+     wordBoundaryProvider?: import('@replit/codemirror-vim-core').WordBoundaryProvider,
+   } = {};
+   marks: Record<string, Marker> = Object.create(null);
+@@ -330,6 +331,7 @@ export class CodeMirror {
+     )
+   };
+   replaceRange(text: string, s: Pos, e?: Pos, source?: string) {
++    if (this.state.lindvimeraTarget?.replaceRange?.(text, s, e)) return;
+     if (!e) e = s;
+     var doc = this.cm6.state.doc;
+     var from = indexFromPos(doc, s);
+@@ -337,6 +339,7 @@ export class CodeMirror {
+     dispatchChange(this, { changes: { from, to, insert: text } });
+   };
+   replaceSelection(text: string) {
++    if (this.state.lindvimeraTarget?.replaceSelection?.(text)) return;
+     dispatchChange(this, this.cm6.state.replaceSelection(text))
+   };
+   replaceSelections(replacements: string[]) {

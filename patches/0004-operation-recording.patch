@@ -1,0 +1,158 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index 3cafa6b..6acc1c2 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -828,6 +828,11 @@ export function initVim(CM) {
+     suppressErrorLogging: false,
+ 
+     InsertModeKey: InsertModeKey,
++    /** Forward a native input surface key without re-executing the edit. */
++    recordInsertModeKey: function(cm, event) {
++      if (cm.state.vim && cm.state.vim.insertMode && !vimGlobalState.macroModeState.isPlaying)
++        onKeyEventTargetKeyDown(event);
++    },
+     /**@type {(lhs: string, rhs: string, ctx: string) => void} */
+     map: function(lhs, rhs, ctx) {
+       // Add user defined key bindings.
+@@ -6941,7 +6946,10 @@ export function initVim(CM) {
+    * - For recording deletes in insert mode.
+    * @arg {KeyboardEvent} e
+    */
++  var lastRecordedInputKey;
+   function onKeyEventTargetKeyDown(e) {
++    if (e === lastRecordedInputKey) return;
++    lastRecordedInputKey = e;
+     var macroModeState = vimGlobalState.macroModeState;
+     var lastChange = macroModeState.lastInsertModeChanges;
+     var keyName = CM.keyName ? CM.keyName(e) : e.key;
+diff --git a/packages/codemirror-vim/src/cm_adapter.ts b/packages/codemirror-vim/src/cm_adapter.ts
+index 464f0db..a501122 100644
+--- a/packages/codemirror-vim/src/cm_adapter.ts
++++ b/packages/codemirror-vim/src/cm_adapter.ts
+@@ -88,7 +88,7 @@ interface Operation {
+ 
+ // workaround for missing api for merging transactions
+ function dispatchChange(cm: CodeMirror, transaction: any) {
+-  var view = cm.cm6;
++  var view = cm.getInputView();
+   if (view.state.readOnly)
+     return;
+   var type = "input.type.compose";
+@@ -122,14 +122,20 @@ function runHistoryCommand(cm: CodeMirror, revert: boolean) {
+ }
+ 
+ var keys: Record<string, (cm: CodeMirror) => void> = {
+-  Left: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Left"} as KeyboardEvent, "editor"),
+-  Right: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Right"} as KeyboardEvent, "editor"),
+-  Up: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Up"} as KeyboardEvent, "editor"),
+-  Down: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Down"} as KeyboardEvent, "editor"),
+-  Backspace: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Backspace"} as KeyboardEvent, "editor"),
+-  Delete: (cm:CodeMirror) => runScopeHandlers(cm.cm6, {key: "Delete"} as KeyboardEvent, "editor"),
++  Left: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Left"} as KeyboardEvent, "editor"),
++  Right: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Right"} as KeyboardEvent, "editor"),
++  Up: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Up"} as KeyboardEvent, "editor"),
++  Down: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Down"} as KeyboardEvent, "editor"),
++  Backspace: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Backspace"} as KeyboardEvent, "editor"),
++  Delete: (cm:CodeMirror) => runScopeHandlers(cm.getInputView(), {key: "Delete"} as KeyboardEvent, "editor"),
+ };
+ 
++export interface RecordedChange {
++  text: string[];
++  origin?: string;
++  next?: RecordedChange;
++}
++
+ export class CodeMirror {
+   static isMac = typeof navigator != "undefined" && /Mac/.test(navigator.platform);
+   // --------------------------
+@@ -142,7 +148,7 @@ export class CodeMirror {
+     undo: function (cm: CodeMirror) { runHistoryCommand(cm, true); },
+     newlineAndIndent: function (cm: CodeMirror) {
+       insertNewlineAndIndent({
+-        state: cm.cm6.state,
++        state: cm.getInputView().state,
+         dispatch: (tr) => {
+           return dispatchChange(cm, tr);
+         }
+@@ -207,6 +213,11 @@ export class CodeMirror {
+   curOp: Operation | null | undefined;
+   options: any = {};
+   _handlers: any = {};
++  /** Host integration: one logical command can span many native input transactions. */
++  operationObserver?: { start(cm: CodeMirror): void; end(cm: CodeMirror): void };
++  /** Map editor changes to logical input after bookmarks have been updated. */
++  changeTransformer?: (update: ViewUpdate, changes: RecordedChange[]) => RecordedChange[];
++  inputViewProvider?: () => EditorView;
+   constructor(cm6: EditorView) {
+     this.cm6 = cm6;
+     this.onChange = this.onChange.bind(this);
+@@ -356,8 +367,11 @@ export class CodeMirror {
+   somethingSelected() {
+     return this.cm6.state.selection.ranges.some(r => !r.empty)
+   };
++  getInputView() {
++    return this.inputViewProvider?.() || this.cm6;
++  };
+   getInputField() {
+-    return this.cm6.contentDOM;
++    return this.getInputView().contentDOM;
+   };
+   clipPos(p: Pos) {
+     var doc = this.cm6.state.doc
+@@ -661,18 +675,23 @@ export class CodeMirror {
+       this.virtualSelection.ranges = this.virtualSelection.ranges.map(range => range.map(update.changes))
+     }
+     var curOp = this.curOp = this.curOp || ({} as Operation);
++    const recordedChanges: RecordedChange[] = [];
+     update.changes.iterChanges((fromA: number, toA: number, fromB: number, toB: number, text: Text) => {
+       if (curOp.$changeStart == null || curOp.$changeStart > fromB) 
+         curOp.$changeStart = fromB;
+       this.$lastChangeEndOffset = toB;
+-      var change = { text: text.toJSON() };
++      recordedChanges.push({ text: text.toJSON() });
++    }, true);
++    const logicalChanges = this.changeTransformer
++      ? this.changeTransformer(update, recordedChanges) : recordedChanges;
++    for (const change of logicalChanges) {
+       if (!curOp.lastChange) {
+         curOp.lastChange = curOp.change = change;
+       } else {
+         curOp.lastChange.next = curOp.lastChange = change;
+       }
+-    }, true);
+-    if (!curOp.changeHandlers)
++    }
++    if (logicalChanges.length && !curOp.changeHandlers)
+       curOp.changeHandlers = this._handlers["change"] && this._handlers["change"].slice();
+   };
+   onSelectionChange() {
+@@ -682,6 +701,8 @@ export class CodeMirror {
+     this.curOp.cursorActivity = true;
+   };
+   operation<T>(fn: ()=>T, force?: boolean) {
++    const outermost = !this.curOp?.$d;
++    if (outermost) this.operationObserver?.start(this);
+     if (!this.curOp)
+       this.curOp = { $d: 0 };
+     this.curOp.$d++;
+@@ -693,6 +714,7 @@ export class CodeMirror {
+         if (!this.curOp.$d)
+           this.onBeforeEndOperation()
+       }
++      if (outermost) this.operationObserver?.end(this);
+     }
+     return result
+   };
+diff --git a/packages/codemirror-vim/src/index.ts b/packages/codemirror-vim/src/index.ts
+index 2cc853d..2a608b5 100644
+--- a/packages/codemirror-vim/src/index.ts
++++ b/packages/codemirror-vim/src/index.ts
+@@ -171,7 +171,7 @@ const vimPlugin = ViewPlugin.fromClass(
+       Vim.leaveVimMode(this.cm);
+       this.updateClass();
+       this.blockCursor.destroy();
+-      delete (this.view as any).cm;
++      if ((this.view as any).cm === this.cm) delete (this.view as any).cm;
+     }
+ 
+     highlight(query: any) {

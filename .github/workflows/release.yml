@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags: ["[0-9]*.[0-9]*.[0-9]*"]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: lindvimera-refs/heads/release
+  queue: max
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Verify tag, main CI, and tested artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = $env:GITHUB_REF_NAME
+          $commit = $env:GITHUB_SHA
+          if ($env:GITHUB_REF_TYPE -ne 'tag' -or $tag -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw 'Use a numeric X.Y.Z tag without a v prefix or prerelease suffix.'
+          }
+          git fetch --force --no-tags origin '+refs/heads/release:refs/remotes/origin/release' "+refs/tags/${tag}:refs/tags/${tag}"
+          if ((git rev-parse "refs/tags/${tag}^{commit}") -ne $commit) { throw 'The tag moved after this workflow started.' }
+          git merge-base --is-ancestor $commit refs/remotes/origin/release
+          $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $versions = Get-Content versions.json -Raw | ConvertFrom-Json -AsHashtable
+          if ($manifest.version -ne $tag -or $package.version -ne $tag -or $versions[$tag] -ne $manifest.minAppVersion) {
+            throw 'The tag, package, manifest, and versions.json must agree.'
+          }
+
+          $pages = gh api "repos/$repo/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=$commit&per_page=100" --paginate --slurp | ConvertFrom-Json
+          $run = $pages.workflow_runs | Where-Object {
+            $_.head_sha -eq $commit -and $_.head_branch -eq 'main' -and $_.event -eq 'push' -and $_.head_repository.full_name -eq $repo
+          } | Sort-Object id -Descending | Select-Object -First 1
+          if (!$run -or $run.status -ne 'completed' -or $run.conclusion -ne 'success') {
+            throw 'The latest main CI for this commit must succeed. Re-run all CI jobs, then retry this workflow.'
+          }
+          $jobPages = gh api "repos/$repo/actions/runs/$($run.id)/attempts/$($run.run_attempt)/jobs?per_page=100" --paginate --slurp | ConvertFrom-Json
+          foreach ($name in @('quality', 'unit', 'build', 'e2e', 'release-ready')) {
+            $jobs = @($jobPages.jobs | Where-Object name -EQ $name)
+            if ($jobs.Count -ne 1 -or $jobs[0].status -ne 'completed' -or $jobs[0].conclusion -ne 'success') {
+              throw "$name must succeed in CI attempt $($run.run_attempt). Re-run all main CI jobs."
+            }
+          }
+          $artifactPages = gh api "repos/$repo/actions/runs/$($run.id)/artifacts?per_page=100" --paginate --slurp | ConvertFrom-Json
+          $artifacts = @($artifactPages.artifacts | Where-Object name -EQ "release-$commit")
+          if ($artifacts.Count -ne 1 -or $artifacts[0].expired -or [datetime]$artifacts[0].expires_at -le [datetime]::UtcNow -or $artifacts[0].workflow_run.head_sha -ne $commit) {
+            throw 'The tested release artifact is missing or expired. Re-run all main CI jobs, then retry.'
+          }
+          $directory = '.release-gate/artifact'
+          gh run download $run.id --repo $repo --name "release-$commit" --dir $directory
+          $files = @('main.js', 'manifest.json', 'styles.css', "lindvimera-$tag.zip", 'SHA256SUMS', 'provenance.json')
+          if (Compare-Object (Get-ChildItem $directory -Force).Name $files -CaseSensitive) { throw 'Unexpected release files.' }
+          $provenance = Get-Content "$directory/provenance.json" -Raw | ConvertFrom-Json -AsHashtable
+          if ($provenance.schemaVersion -ne 1 -or $provenance.commit -ne $commit -or $provenance.runId -ne [string]$run.id -or $provenance.runAttempt -ne $run.run_attempt -or $provenance.version -ne $tag) {
+            throw 'Artifact provenance does not match the successful CI attempt.'
+          }
+          if (Compare-Object @($provenance.files.Keys) @($files | Where-Object { $_ -ne 'provenance.json' }) -CaseSensitive) { throw 'Unexpected provenance inventory.' }
+          $hashes = [ordered]@{}
+          foreach ($file in $files) {
+            $hashes[$file] = (Get-FileHash "$directory/$file" -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($file -ne 'provenance.json' -and $hashes[$file] -cne $provenance.files[$file]) { throw "Checksum mismatch: $file" }
+          }
+          $sums = @{}
+          foreach ($line in Get-Content "$directory/SHA256SUMS") {
+            if ($line -cnotmatch '^([a-f0-9]{64})  (.+)$' -or $sums.ContainsKey($Matches[2])) { throw 'Invalid SHA256SUMS.' }
+            $sums[$Matches[2]] = $Matches[1]
+          }
+          if (Compare-Object @($sums.Keys) @($files | Where-Object { $_ -notin @('SHA256SUMS', 'provenance.json') }) -CaseSensitive) { throw 'Incomplete SHA256SUMS.' }
+          foreach ($file in $sums.Keys) { if ($sums[$file] -cne $hashes[$file]) { throw "SHA256SUMS mismatch: $file" } }
+          $artifactManifest = Get-Content "$directory/manifest.json" -Raw | ConvertFrom-Json
+          if ($artifactManifest.id -ne 'lindvimera' -or $artifactManifest.version -ne $tag) { throw 'Artifact manifest differs from the tag.' }
+          [ordered]@{
+            schemaVersion = 1; repository = $repo; commit = $commit; version = $tag
+            runId = [string]$run.id; runAttempt = $run.run_attempt; artifactId = $artifacts[0].id; hashes = $hashes
+          } | ConvertTo-Json -Depth 5 | Set-Content .release-gate/info.json -Encoding utf8
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: publication-${{ github.run_id }}
+          path: .release-gate/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    needs: verify
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: publication-${{ github.run_id }}
+          path: .release-gate/
+      - name: Publish verified assets without overwriting releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release/publish.ps1
