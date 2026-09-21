@@ -7,6 +7,11 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { distributionFiles } from "../../scripts/distribution.mjs";
+import {
+  distributionAssetSources,
+  legacyLinderaFiles,
+  linderaRuntimeFiles,
+} from "../../scripts/lindera-assets.mjs";
 import { validateDistribution } from "../../scripts/release/validate.mjs";
 
 const packageScript = fileURLToPath(new URL("../../scripts/release/package.ps1", import.meta.url));
@@ -52,6 +57,44 @@ function packageDistribution(root, overrides = {}) {
     },
   });
 }
+
+test("distributes surface-only dictionary assets while retaining legacy detail cleanup", () => {
+  const names = [
+    "metadata.json",
+    "dict.trie",
+    "dict.valsidx",
+    "dict.vals",
+    "dict.wordsidx",
+    "dict.words",
+    "matrix.mtx",
+    "char_def.bin",
+    "unk.bin",
+  ];
+  const runtimeNames = names.filter((name) => name !== "dict.words" && name !== "dict.wordsidx");
+  const sources = distributionAssetSources({
+    wasmPath: "wasm-source",
+    dictionaryPaths: names.map((name) => `cache/${name}`),
+    licensePath: "license-source",
+    noticePath: "notice-source",
+  });
+  assert.deepEqual(
+    [...sources],
+    [
+      ["lindera/lindera_wasm_bg.wasm", "wasm-source"],
+      ...runtimeNames.map((name) => [`lindera/ipadic/${name}`, `cache/${name}`]),
+      ["lindera/LICENSE", "license-source"],
+      ["lindera/ipadic/NOTICE.txt", "notice-source"],
+    ],
+  );
+  assert.deepEqual(linderaRuntimeFiles, [
+    "lindera/lindera_wasm_bg.wasm",
+    ...runtimeNames.map((name) => `lindera/ipadic/${name}`),
+  ]);
+  assert.deepEqual(
+    [...legacyLinderaFiles].sort(),
+    ["lindera/lindera_wasm_bg.wasm", ...names.map((name) => `lindera/ipadic/${name}`)].sort(),
+  );
+});
 
 test("validates the complete tested distribution and expected release version", async (t) => {
   const root = await fixture(t);

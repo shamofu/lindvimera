@@ -7,6 +7,7 @@ import {
 
 const runtime = vi.hoisted(() => ({
   initialize: vi.fn(),
+  loadDictionary: vi.fn(),
   dictionaryFree: vi.fn(),
   builderFree: vi.fn(),
   handleFree: vi.fn(),
@@ -18,7 +19,9 @@ const runtime = vi.hoisted(() => ({
 
 vi.mock("lindera-wasm", () => ({
   default: runtime.initialize,
-  loadDictionaryFromBytes: () => ({ free: runtime.dictionaryFree }),
+  loadDictionaryFromBytes: runtime.loadDictionary.mockImplementation(() => ({
+    free: runtime.dictionaryFree,
+  })),
   TokenizerBuilder: class {
     mode = "normal";
     setDictionaryInstance() {
@@ -43,7 +46,7 @@ const bytes = new Uint8Array([0]);
 const assets: LinderaAssets = {
   wasm: bytes,
   dictionary: Object.fromEntries(
-    linderaDictionaryFiles.map((name) => [name, bytes]),
+    linderaDictionaryFiles.map((name, index) => [name, new Uint8Array([index + 1])]),
   ) as LinderaAssets["dictionary"],
 };
 
@@ -58,6 +61,27 @@ describe("Lindera adapter", () => {
   it("preserves original UTF-16 offsets and initializes both modes once", async () => {
     const result = await createLinderaSegmenters(assets);
     expect(runtime.initialize).toHaveBeenCalledWith({ module_or_path: bytes });
+    expect(linderaDictionaryFiles).toEqual([
+      "metadata.json",
+      "dict.trie",
+      "dict.valsidx",
+      "dict.vals",
+      "matrix.mtx",
+      "char_def.bin",
+      "unk.bin",
+    ]);
+    expect(runtime.loadDictionary).toHaveBeenCalledTimes(1);
+    expect(runtime.loadDictionary).toHaveBeenCalledWith(
+      assets.dictionary["metadata.json"],
+      assets.dictionary["dict.trie"],
+      assets.dictionary["dict.valsidx"],
+      assets.dictionary["dict.vals"],
+      new Uint8Array(),
+      new Uint8Array(),
+      assets.dictionary["matrix.mtx"],
+      assets.dictionary["char_def.bin"],
+      assets.dictionary["unk.bin"],
+    );
     expect(runtime.modes).toEqual(["normal", "decompose"]);
     expect(result.normal.segment("今日は🍇。")).toEqual([
       { from: 0, to: 2 },

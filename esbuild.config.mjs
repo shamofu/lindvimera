@@ -11,6 +11,7 @@ import {
 } from "./scripts/distribution.mjs";
 import {
   distributionAssetSources,
+  legacyLinderaFiles,
   linderaRuntimeFiles,
   prepareAssets,
 } from "./scripts/lindera-assets.mjs";
@@ -106,7 +107,7 @@ const options = {
               ...distributionAssets.map((file) => copyAsset(file)),
               ...upstreamNoticeFiles.map((file) => copyAsset(file, linderaAssets.get(file))),
               // Remove obsolete loose binaries left by an earlier local build.
-              ...linderaRuntimeFiles.map((file) =>
+              ...legacyLinderaFiles.map((file) =>
                 rm(join(distributionDirectory, file), { force: true }),
               ),
             ]);

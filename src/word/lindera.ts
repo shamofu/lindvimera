@@ -10,8 +10,6 @@ export const linderaDictionaryFiles = [
   "dict.trie",
   "dict.valsidx",
   "dict.vals",
-  "dict.wordsidx",
-  "dict.words",
   "matrix.mtx",
   "char_def.bin",
   "unk.bin",
@@ -37,8 +35,9 @@ export async function createLinderaSegmenters(assets: LinderaAssets): Promise<Li
     data["dict.trie"],
     data["dict.valsidx"],
     data["dict.vals"],
-    data["dict.wordsidx"],
-    data["dict.words"],
+    // With no token filters, tokenizeSurfaces never reads morphological details.
+    new Uint8Array(), // dict.wordsidx
+    new Uint8Array(), // dict.words
     data["matrix.mtx"],
     data["char_def.bin"],
     data["unk.bin"],

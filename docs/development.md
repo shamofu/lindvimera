@@ -31,7 +31,7 @@ pnpm check
 
 ライセンス文書と改変ソースは`dist/`の別ファイルにも、bundle末尾のパス付き行コメントにも全文を保持します。コメントは改行をLFへ統一して読みやすく連結し、監視ビルドでも更新します。ビルド時にJavaScript構文を確認し、内包したWASM・辞書の動作は自動E2Eで検査します。配布ZIPの作成と公開はworkflow内で行い、ZIPには`lindvimera/`ディレクトリ以下に3ファイルと元のライセンス文書・改変ソースを揃えます。
 
-LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストールした`lindera-wasm`パッケージを使用します。`scripts/lindera-assets.mjs`は別配布のIPADIC辞書ZIPだけを取得し、SHA-256を検証して展開します。初回取得にはネットワークが必要で、以後はcache内のZIPも毎回検証して利用します。`dist/`、`.generated/`、`.cache/`、`.test-runtime/`、`.release/`、`.release-gate/`は生成物としてGit管理から除外します。
+LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストールした`lindera-wasm`パッケージを使用します。`scripts/lindera-assets.mjs`は別配布のIPADIC辞書ZIPだけを取得し、SHA-256を検証して展開します。完全辞書9ファイルは比較検証用にcacheへ保持し、配布物には`dict.words`・`dict.wordsidx`を除く7ファイルを同梱します。同梱する各ファイルのバイト列と語彙は変更しません。初回取得にはネットワークが必要で、以後はcache内のZIPも毎回検証して利用します。`dist/`、`.generated/`、`.cache/`、`.test-runtime/`、`.release/`、`.release-gate/`は生成物としてGit管理から除外します。
 
 `obsidian`、`electron`、`@codemirror/*`、`@lezer/*`、`node:*`はObsidian desktopが提供するため外部依存にします。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
 
@@ -71,6 +71,8 @@ LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストー�
 Linderaはプラグイン単位で非同期初期化し、`normal`と`decompose`のtokenizerで一つの辞書を共有します。初期化後の移動・選択は同期処理です。読込中・初期化失敗・解析失敗時はBudouXを使い、失敗通知は一度だけ行います。破棄中に初期化が完了した場合も資源を解放します。
 
 辞書wrapperは`setDictionaryInstance()`へ所有権を渡した後に直接解放しません。builder、setterの戻り値のhandle、tokenizerをそれぞれの寿命に合わせて解放します。WASMと辞書は個別のデータとしてbundleに内包し、復元した辞書のバイト列を`loadDictionaryFromBytes()`へ渡します。
+
+`tokenizeSurfaces()`は品詞・読み・原形などの詳細データを参照しないため、`dict.words`・`dict.wordsidx`は実行時に読み込まず、辞書読込APIの対応する2引数へ空の`Uint8Array`を渡します。空の圧縮assetは作りません。この構成はフィルターを使わないsurface専用解析を前提とします。Lindera・辞書・解析APIの更新やフィルターの導入時には、検証済みZIPの完全辞書と本番adapterを実WASMで再比較し、両モードの分割・原文復元・UTF-16範囲が一致することを確認します。日本語、複合語、英数字混在、未知語、記号、絵文字、結合文字を含め、不正UTF-16の拒否も確認します。
 
 日本語設定・分割モードの変更や辞書読込完了時は境界providerだけを交換します。未完のoperator、カウント、レジスタ指定、マクロ記録・再生中は交換を延期し、選択範囲、Vimセッション、編集履歴を維持します。`linderaMode`の欠落・不正値は`normal`として読み込みます。
 

@@ -24,10 +24,20 @@ const dictionaryNames = [
   "char_def.bin",
   "unk.bin",
 ];
+// Keep the complete upstream dictionary in the verified build cache for comparison.
+// Surface-only tokenization does not read these morphological detail files.
+const dictionaryDetailNames = ["dict.wordsidx", "dict.words"];
+const runtimeDictionaryNames = dictionaryNames.filter(
+  (name) => !dictionaryDetailNames.includes(name),
+);
 
 export const linderaRuntimeFiles = [
   "lindera/lindera_wasm_bg.wasm",
-  ...dictionaryNames.map((name) => `lindera/ipadic/${name}`),
+  ...runtimeDictionaryNames.map((name) => `lindera/ipadic/${name}`),
+];
+export const legacyLinderaFiles = [
+  ...linderaRuntimeFiles,
+  ...dictionaryDetailNames.map((name) => `lindera/ipadic/${name}`),
 ];
 /** Read fixed IPADIC members from the verified ZIP archive. */
 function zipMembers(bytes) {
@@ -113,9 +123,9 @@ export async function prepareAssets() {
 export function distributionAssetSources(assets) {
   return new Map([
     ["lindera/lindera_wasm_bg.wasm", assets.wasmPath],
-    ...dictionaryNames.map((name, index) => [
+    ...runtimeDictionaryNames.map((name) => [
       `lindera/ipadic/${name}`,
-      assets.dictionaryPaths[index],
+      assets.dictionaryPaths[dictionaryNames.indexOf(name)],
     ]),
     ["lindera/LICENSE", assets.licensePath],
     ["lindera/ipadic/NOTICE.txt", assets.noticePath],
