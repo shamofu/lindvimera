@@ -494,6 +494,16 @@ it("accounts for every supported command and extension in executable coverage", 
   }
   const external = [
     {
+      commands: ["ih", "ah", "iL", "aL"],
+      file: "../probe/structure-cases.ts",
+      scenario: "structureEditingCases",
+    },
+    {
+      commands: ["zo", "zc", "za", "zO", "zC", "zA", "zR", "zM"],
+      file: "../probe/host-regression.ts",
+      scenario: 'await check("host-folding"',
+    },
+    {
       commands: [":"],
       file: "../ex/replay.test.ts",
       scenario: 'it("records a completed physical Ex prompt and replays the command once"',

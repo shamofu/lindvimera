@@ -8,10 +8,12 @@ import type {
 import { indexMarkdown, markdownObject, structureMotion, type MarkdownIndex } from "./ranges";
 import { findSurround, surroundText, type SurroundRange } from "./surround";
 import { internalLinkAt } from "./links";
+import { markdownBlockObject } from "./blocks";
 
 export { indexMarkdown, markdownObject, structureMotion } from "./ranges";
 export { surroundPair, surroundText, findSurround, changeSurround } from "./surround";
 export { internalLinkAt } from "./links";
+export { indexMarkdownBlocks, markdownBlockObject } from "./blocks";
 
 export interface MarkdownSettings {
   motions: boolean;
@@ -193,21 +195,35 @@ export function installMarkdownCommands(): void {
       );
     }
   }
-  for (const kind of ["*", "_", "`", "l", "C"] as const) {
+  for (const kind of ["*", "_", "`", "l", "C", "h", "L"] as const) {
     const name = `lindvimeraObject${kind}`;
     Vim.defineMotion(name, (cm, head, args, vim) => {
+      const block = kind === "h" || kind === "L";
+      const editor = cm as CodeMirrorV & { cm6?: object; getEditingView?: () => object };
+      if (block && editor.getEditingView?.() !== editor.cm6) return;
       const { text, index } = documentIndex(cm);
-      const range = markdownObject(
-        index,
-        cm.indexFromPos(head),
-        kind,
-        !!args.textObjectInner,
-        args.repeat,
-      );
+      const range = block
+        ? markdownBlockObject(
+            index,
+            text.length,
+            cm.indexFromPos(head),
+            kind,
+            !!args.textObjectInner,
+            args.repeat,
+          )
+        : markdownObject(index, cm.indexFromPos(head), kind, !!args.textObjectInner, args.repeat);
       if (!range) return;
+      const linewise = "linewise" in range && range.linewise === true;
+      if (block) {
+        args.linewise = linewise;
+        if (vim.visualMode) {
+          vim.visualLine = linewise;
+          vim.visualBlock = false;
+        }
+      }
       // Operator text objects use exclusive ends; Vim's visual selection uses inclusive ends.
       const end =
-        vim.visualMode && range.to > range.from
+        (vim.visualMode || linewise) && range.to > range.from
           ? cm.state.wordBoundaryProvider
             ? lastCharacter(text, range.from, range.to)
             : range.to - ((text.codePointAt(range.to - 2) ?? 0) > 0xffff ? 2 : 1)

@@ -28,6 +28,8 @@ import { VimHistoryGroup } from "./history";
 import { PendingCommands } from "./pending";
 import { NavigationSession } from "../navigation/session";
 import { ExSession } from "../ex/session";
+import { PendingHints } from "../input/hints";
+import { configureFolding, clearFolding } from "../folding";
 
 export interface EditorHost {
   settings(): LindvimeraSettings;
@@ -37,7 +39,7 @@ export interface EditorHost {
   modeChanged?(mode: string): void;
   error?(message: string): void;
   openLink?(linktext: string): void;
-  inputUI?(event: KeyboardEvent): "none" | "suggestion" | "blocked";
+  inputUI?(event?: KeyboardEvent): "none" | "suggestion" | "blocked";
   cancelInputUI?(): boolean;
   focusChanged?(): void;
 }
@@ -77,6 +79,7 @@ export class EditorSession {
   private restoreInputLifecycle?: () => void;
   private disposed = false;
   private removePolicy: () => void;
+  private hints: PendingHints;
   private readonly keyDecisions = new WeakMap<KeyboardEvent, InputDecision>();
   private readonly listeners: [string, EventListener][] = [];
 
@@ -96,6 +99,17 @@ export class EditorSession {
     this.inputTarget = view;
     history.attach(cm);
     this.pending = new PendingCommands(cm, history, (message) => host.error?.(message));
+    configureFolding(cm, {
+      enabled: () => host.settings().folding,
+      documentIdentity: () => host.documentIdentity?.() ?? view,
+      waitFor: (task, cancel) => this.pending.waitFor(task, cancel),
+      afterCommand: () => this.refreshMode(),
+    });
+    this.hints = new PendingHints(cm, {
+      settings: () => host.settings(),
+      target: () => this.inputTarget,
+      blocked: () => this.pending.pending || (host.inputUI?.() ?? "none") !== "none",
+    });
     this.ex = new ExSession(cm, {
       documentIdentity: () => host.documentIdentity?.() ?? view,
       history,
@@ -121,6 +135,7 @@ export class EditorSession {
       enabled: () => host.settings().tables,
       inputExtension: [history.inputExtension, this.navigation.inputExtension],
       beforeTargetChange: () => {
+        this.hints.hide();
         this.ex.reset();
         this.escape?.flush();
         cancelMarkdownInput(cm as CodeMirrorV);
@@ -160,6 +175,7 @@ export class EditorSession {
     const originalSetState = lifecycle.setState;
     const originalDestroy = lifecycle.destroy;
     const setState: EditorView["setState"] = (state) => {
+      this.hints.hide();
       this.finishInsert();
       this.navigation.reset();
       originalSetState.call(view, state);
@@ -183,7 +199,10 @@ export class EditorSession {
         event.preventDefault();
     });
     for (const name of ["pointerdown", "focusout", "paste", "drop", "compositionstart"])
-      this.listen(name, () => this.escape.flush());
+      this.listen(name, () => {
+        this.hints.hide();
+        this.escape.flush();
+      });
     this.listen("focusin", () => {
       this.host.focusChanged?.();
       queueMicrotask(() => {
@@ -195,6 +214,8 @@ export class EditorSession {
     });
     cm.on("vim-mode-change", this.modeChanged);
     cm.on("vim-command-done", this.scheduleWordConfiguration);
+    cm.on("vim-command-done", this.hideHints);
+    cm.on("dialog", this.hideHints);
     sessions.set(view, this);
     this.configure();
   }
@@ -233,6 +254,7 @@ export class EditorSession {
   }
 
   cancelPendingInput(): void {
+    this.hints.hide();
     this.escape.flush();
     cancelMarkdownInput(this.cm as CodeMirrorV);
     Vim.cancelPendingInput(this.cm);
@@ -243,6 +265,7 @@ export class EditorSession {
     this.table.syncTarget(navigating);
     const next = this.table.nativeInputView() ?? this.view;
     if (next !== this.inputTarget) {
+      this.hints.hide();
       this.escape.flush();
       this.restoreInputLifecycle?.();
       this.restoreInputLifecycle = undefined;
@@ -253,10 +276,12 @@ export class EditorSession {
         const originalSetState = lifecycle.setState;
         const originalDestroy = lifecycle.destroy;
         const setState: EditorView["setState"] = (state) => {
+          this.hints.hide();
           this.escape.flush();
           originalSetState.call(next, state);
         };
         const destroy = () => {
+          this.hints.hide();
           this.escape.flush();
           originalDestroy.call(next);
         };
@@ -291,6 +316,7 @@ export class EditorSession {
     const previous = this.keyDecisions.get(event);
     if (previous) return previous;
     if (this.disposed || !this.isInput(event.target)) return "outside";
+    this.hints.hide();
     this.switchTarget();
     // Stopping a macro does not always emit command-done. Apply the pending
     // configuration before the next independent user command instead.
@@ -440,7 +466,10 @@ export class EditorSession {
         .filter(Boolean)
         .join(" · "),
     );
+    this.hints?.refresh();
   };
+
+  private readonly hideHints = () => this.hints.hide();
 
   refreshMode(): void {
     this.modeChanged();
@@ -531,6 +560,8 @@ export class EditorSession {
 
   destroy(): void {
     this.disposed = true;
+    this.hints.destroy();
+    clearFolding(this.cm);
     this.restoreLifecycle();
     this.restoreInputLifecycle?.();
     this.escape.dispose();
@@ -538,6 +569,8 @@ export class EditorSession {
       this.view.dom.removeEventListener(name, handler, true);
     this.cm.off("vim-mode-change", this.modeChanged);
     this.cm.off("vim-command-done", this.scheduleWordConfiguration);
+    this.cm.off("vim-command-done", this.hideHints);
+    this.cm.off("dialog", this.hideHints);
     this.pendingWords = undefined;
     this.navigation.destroy();
     this.ex.destroy();

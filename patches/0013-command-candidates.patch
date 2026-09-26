@@ -1,0 +1,53 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+index bea29de..5d6ca2e 100644
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -1148,6 +1148,48 @@ export function initVim(CM) {
+         };
+       }
+     },
++    /**
++     * Query possible continuations without consuming keys or recording input.
++     * Literal object variants may be supplied by the host's command vocabulary.
++     * @arg {CodeMirror} cm_
++     * @arg {readonly string[]} [literalKeys]
++     * @returns {{keys: string, name: string, type: string, toKeys?: string}[]}
++     */
++    getPendingCommands: function(cm_, literalKeys) {
++      var cm = /**@type {CodeMirrorV}*/(cm_);
++      var vim = cm.state.vim;
++      if (!vim || vim.insertMode) return [];
++      var input = vim.inputState;
++      var prefix = input.keyBuffer.join('').replace(/^[1-9]\d*/, '');
++      if (!prefix && !input.operator && !vim.expectLiteralNext) return [];
++      var context = vim.visualMode ? 'visual' : 'normal';
++      var candidates = defaultKeymap.map(function(command) { return command.keys; }).concat(literalKeys || []);
++      var seen = new Set();
++      var result = [];
++      for (var i = 0; i < candidates.length; i++) {
++        var keys = candidates[i];
++        if (/^[ia]<register>$/.test(keys)) continue;
++        var typed = input.operatorShortcut == keys && keys.length > 1 ? keys.slice(-1) : keys;
++        if (typed.indexOf(prefix) != 0 || seen.has(typed)) continue;
++        var probe = input.operatorShortcut && input.operatorShortcut.slice(-1) == typed ? input.operatorShortcut : keys;
++        var command = commandMatches(probe, defaultKeymap, context, input, cm).full[0];
++        if (!command) continue;
++        if (input.operator && command.type == 'operator' && !command.continueOperator &&
++            (input.operatorShortcut ? command.keys != input.operatorShortcut : command.operator != input.operator)) continue;
++        // An earlier complete binding shadows a longer continuation.
++        var tokens = typed.match(/<[^>]+>|./g) || [];
++        var shadowed = false;
++        for (var length = 1; length < tokens.length; length++) {
++          var start = tokens.slice(0, length).join('');
++          if (commandMatches(start, defaultKeymap, context, input, cm).full.length) { shadowed = true; break; }
++        }
++        if (shadowed) continue;
++        seen.add(typed);
++        var name = command.type == 'action' ? command.action : command.type == 'motion' ? command.motion : command.type == 'operator' ? command.operator : command.type;
++        result.push({ keys: typed, name: name || '', type: command.type, toKeys: command.type == 'keyToKey' ? command.toKeys : undefined });
++      }
++      return result;
++    },
+     /**@type {(cm: CodeMirrorV, input: string)=>void} */
+     handleEx: function(cm, input) {
+       exCommandDispatcher.processCommand(cm, input);

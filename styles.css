@@ -3,6 +3,104 @@
   white-space: pre-line;
 }
 
+.lindvimera-pending-hints {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  max-width: min(28rem, calc(100% - 2rem));
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  pointer-events: none;
+}
+
+.lindvimera-pending-hints > div {
+  display: flex;
+  gap: 0.7rem;
+  margin-block: 0.2rem;
+}
+
+.lindvimera-pending-hints kbd {
+  min-width: 3.5em;
+  flex-shrink: 0;
+}
+
+.lindvimera-hint-title {
+  color: var(--text-muted);
+  font-weight: var(--font-semibold);
+}
+
+.lindvimera-mapping-setting {
+  flex-wrap: wrap;
+}
+
+.lindvimera-mapping-setting > .setting-item-control {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 0.75em;
+}
+
+.lindvimera-mapping-editor {
+  width: 100%;
+}
+
+.lindvimera-mapping-row {
+  margin-bottom: 0.75em;
+}
+
+.lindvimera-mapping-fields,
+.lindvimera-mapping-actions,
+.lindvimera-guide-controls,
+.lindvimera-guide-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.lindvimera-mapping-fields input {
+  flex: 1 1 8em;
+  min-width: 6em;
+  font-family: var(--font-monospace);
+}
+
+.lindvimera-mapping-actions {
+  margin-top: 0.75em;
+  justify-content: flex-end;
+}
+
+.lindvimera-guide-modal {
+  width: min(760px, 90vw);
+}
+
+.lindvimera-guide-controls input {
+  flex: 1 1 100%;
+}
+
+.lindvimera-guide-results {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.lindvimera-guide-entry {
+  padding: 0.8em 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.lindvimera-guide-entry p {
+  margin: 0.4em 0;
+}
+
+.lindvimera-guide-example {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Obsidian hides native layers while it marks a table selection. The active
    cell still needs Vim's own cursor and text selection inside that table. */
 .markdown-source-view.mod-cm6 .cm-table-widget.has-selection .cm-vimMode > .cm-vimCursorLayer,

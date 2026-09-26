@@ -1,8 +1,29 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertBundleBoundary } from "../../scripts/build-boundaries.mjs";
+import { assertBundleBoundary, assertBundledMarkdown } from "../../scripts/build-boundaries.mjs";
 
 const inputs = (...paths) => ({ inputs: Object.fromEntries(paths.map((path) => [path, {}])) });
+
+test("the Markdown parser and its private Lezer dependencies stay bundled", () => {
+  const metadata = inputs(
+    ...["markdown", "common", "highlight"].map(
+      (name) => `node_modules/@lezer/${name}/dist/index.js`,
+    ),
+  );
+  assert.doesNotThrow(() => assertBundledMarkdown(metadata));
+  assert.throws(
+    () => assertBundledMarkdown(inputs("node_modules/@lezer/markdown/dist/index.js")),
+    /must include/,
+  );
+  assert.throws(
+    () =>
+      assertBundledMarkdown({
+        ...metadata,
+        outputs: { "main.js": { imports: [{ path: "@lezer/markdown", external: true }] } },
+      }),
+    /escaped the bundle/,
+  );
+});
 
 test("production accepts runtime code but rejects harness or legacy probe imports", () => {
   assert.doesNotThrow(() =>

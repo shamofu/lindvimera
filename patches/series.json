@@ -73,6 +73,11 @@
       "file": "0012-ex-policy.patch",
       "purpose": "Validate parsed host Ex commands before mutation and share typed, mapped and recorded prompt replay",
       "tests": ["test/ex/parser.test.ts", "test/ex/session.test.ts", "test/ex/replay.test.ts"]
+    },
+    {
+      "file": "0013-command-candidates.patch",
+      "purpose": "Read-only command continuations share matching and host policy without changing input, registers or macro recording",
+      "tests": ["test/input/hints.test.ts"]
     }
   ]
 }

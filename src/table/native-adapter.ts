@@ -4,6 +4,7 @@ import { decodeCell, parseMarkdownTable, TableSourceError } from "./source";
 import type { MarkdownTable, TableCell } from "./source";
 import type { CellPosition } from "./selection";
 import { cellPosition } from "./motion";
+import { revealFoldedRange } from "../folding/host";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -213,6 +214,7 @@ export async function restoreNativeCell(
 ): Promise<void> {
   check();
   let target = position();
+  revealFoldedRange(parent, target.tableFrom, target.tableTo);
   // A retained, fully materialized table can still be outside the viewport.
   parent.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "center" }) });
   let result: NativeTableResolution = {

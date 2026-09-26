@@ -1,7 +1,8 @@
 import { PluginSettingTab, type App, type Plugin, type SettingDefinitionItem } from "obsidian";
 import { checkedEscapeSettings } from "./input/escape";
-import { analyseKeyBindings } from "./input/policy";
-import { checkedKeyBindings, type LindvimeraSettings } from "./settings";
+import type { LindvimeraSettings } from "./settings";
+import { checkedMappingDraft, renderMappingEditor } from "./ui/mapping-editor";
+import { openCommandGuide } from "./ui/guide";
 
 interface SettingsHost extends Plugin {
   settings: LindvimeraSettings;
@@ -16,11 +17,15 @@ const toggles = {
   textObjects: "Markdownテキストオブジェクト",
   surround: "Surround",
   tables: "Live Previewテーブル連携",
+  folding: "Vimキーで折り畳みを操作",
   showStatus: "ステータスバーにモードを表示",
+  showPendingHints: "入力待ちのキー候補を表示",
 } as const;
 
 /** Uses the host's searchable controls while keeping the persisted settings schema. */
 export class LindvimeraSettingTab extends PluginSettingTab {
+  private refreshMappings?: () => void;
+
   constructor(
     app: App,
     private readonly host: SettingsHost,
@@ -47,7 +52,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
       return value;
     }
     if (typeof value !== "string") throw new Error("文字列を指定してください。");
-    if (key === "keyBindings") return checkedKeyBindings(JSON.parse(value));
+    if (key === "keyBindings") return checkedMappingDraft(JSON.parse(value));
     if (key === "escapeSequences") {
       const parsed: unknown = JSON.parse(value);
       if (!Array.isArray(parsed) || !parsed.every((item: unknown) => typeof item === "string"))
@@ -76,6 +81,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
   override async setControlValue(key: string, value: unknown): Promise<void> {
     const checked = this.checkedValue(key, value);
     const settings = this.host.settings;
+    const previousBindings = settings.keyBindings;
     if (Object.hasOwn(toggles, key)) settings[key as keyof typeof toggles] = checked as boolean;
     else if (key === "linderaMode")
       settings.linderaMode = checked as LindvimeraSettings["linderaMode"];
@@ -83,9 +89,20 @@ export class LindvimeraSettingTab extends PluginSettingTab {
     else if (key === "escapeTimeoutMs") settings.escapeTimeoutMs = checked as number;
     else if (key === "keyBindings")
       settings.keyBindings = checked as LindvimeraSettings["keyBindings"];
-    await this.host.saveSettings(key === "japanese" || key === "linderaMode");
+    try {
+      await this.host.saveSettings(key === "japanese" || key === "linderaMode");
+    } catch (error) {
+      if (key === "keyBindings") {
+        settings.keyBindings = previousBindings;
+        // saveSettings applies runtime mappings before persisting. Restore both
+        // the runtime and saved data, retaining the original failure for the form.
+        await this.host.saveSettings(false).catch(() => {});
+      }
+      throw error;
+    }
     // Preserve in-progress text in other controls when dependent state changes.
     this.refreshDomState();
+    this.refreshMappings?.();
   }
 
   override getSettingDefinitions(): SettingDefinitionItem[] {
@@ -133,27 +150,24 @@ export class LindvimeraSettingTab extends PluginSettingTab {
       },
       {
         name: "モード別キー割り当て",
-        desc: 'JSON配列。例: [{"mode":"normal","from":"H","to":"^"}]。mode: normal / insert / visual / operatorPending。未対応の操作を含む割り当ては保存したまま無効にします。',
+        desc: "モード・入力キー・実行キー列を指定します。未対応の操作を含む割り当ては保存したまま無効にします。",
         render: (setting) => {
-          const issues = setting.descEl.createDiv({ cls: "lindvimera-setting-error" });
-          const showIssues = () => {
-            issues.textContent = analyseKeyBindings(this.host.settings.keyBindings)
-              .issues.map(
-                ({ binding, reason }) =>
-                  binding.mode + ": " + binding.from + " → " + binding.to + " — " + reason,
-              )
-              .join("\n");
-          };
-          showIssues();
-          setting.addTextArea((input) =>
-            input.setValue(String(this.getControlValue("keyBindings"))).onChange(async (value) => {
-              try {
-                await this.setControlValue("keyBindings", value);
-                showIssues();
-              } catch (error) {
-                issues.textContent = error instanceof Error ? error.message : String(error);
-              }
-            }),
+          setting.settingEl.classList.add("lindvimera-mapping-setting");
+          this.refreshMappings = renderMappingEditor(setting.controlEl, {
+            getBindings: () => this.host.settings.keyBindings,
+            getSettings: () => this.host.settings,
+            save: (bindings) => this.setControlValue("keyBindings", JSON.stringify(bindings)),
+          });
+        },
+      },
+      {
+        name: "操作ガイド",
+        desc: "対応するVim操作とキー割り当てを、キー・操作名・モード・分類から探せます。",
+        render: (setting) => {
+          setting.addButton((button) =>
+            button
+              .setButtonText("操作ガイドを開く")
+              .onClick(() => openCommandGuide(this.app, () => this.host.settings)),
           );
         },
       },

@@ -4,6 +4,9 @@ import type { EditorView } from "@codemirror/view";
 import type LindvimeraPlugin from "../../src/main";
 import { getCM, Vim, editorSession } from "./runtime";
 import { extendedEditingCases } from "./editing-cases";
+import { structureEditingCases } from "./structure-cases";
+import { runFoldingCases } from "./folding-cases";
+import { runHintCases } from "./hint-cases";
 import { answerEx, exEditingCases, submitEx } from "./ex-cases";
 
 type Check = (name: string, callback: () => void | Promise<void>) => Promise<void>;
@@ -109,7 +112,7 @@ export async function runHostRegression(plugin: LindvimeraPlugin, check: Check):
         });
         await settle();
         const view = owner(markdown).cm;
-        for (const example of extendedEditingCases) {
+        for (const example of [...extendedEditingCases, ...structureEditingCases]) {
           key(view, "<Esc>");
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: example.text },
@@ -137,6 +140,51 @@ export async function runHostRegression(plugin: LindvimeraPlugin, check: Check):
         selection: { anchor: 0 },
         annotations: Transaction.userEvent.of("set"),
       });
+    });
+    await check("host-folding", async () => {
+      for (const source of [true, false]) {
+        await leaf.setViewState({
+          type: "markdown",
+          state: { file: path, mode: "source", source },
+        });
+        await settle();
+        await runFoldingCases(owner(markdown).cm);
+      }
+      await leaf.setViewState({
+        type: "markdown",
+        state: { file: path, mode: "source", source: true },
+      });
+      await settle();
+      await seedEx(baseline);
+    });
+    await check("host-pending-hints", async () => {
+      const savedHints = plugin.settings.showPendingHints;
+      try {
+        plugin.settings.showPendingHints = true;
+        await plugin.saveSettings();
+        for (const source of [true, false]) {
+          await leaf.setViewState({
+            type: "markdown",
+            state: { file: path, mode: "source", source },
+          });
+          await settle();
+          await runHintCases(owner(markdown).cm, {
+            setHintsEnabled: async (enabled) => {
+              plugin.settings.showPendingHints = enabled;
+              await plugin.saveSettings();
+            },
+          });
+        }
+      } finally {
+        plugin.settings.showPendingHints = savedHints;
+        await plugin.saveSettings();
+        await leaf.setViewState({
+          type: "markdown",
+          state: { file: path, mode: "source", source: true },
+        });
+        await settle();
+        await seedEx(baseline);
+      }
     });
     await check("host-ex-editing-and-addresses", async () => {
       for (const source of [true, false]) {

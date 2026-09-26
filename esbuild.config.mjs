@@ -16,7 +16,7 @@ import {
   prepareAssets,
 } from "./scripts/lindera-assets.mjs";
 import { prepareVendor, projectRoot } from "./scripts/prepare-vendor.mjs";
-import { assertBundleBoundary } from "./scripts/build-boundaries.mjs";
+import { assertBundleBoundary, assertBundledMarkdown } from "./scripts/build-boundaries.mjs";
 
 prepareVendor();
 const watch = process.argv.includes("--watch");
@@ -48,7 +48,7 @@ const options = {
       ".generated/codemirror-vim/packages/codemirror-vim-core/vim.js",
     ),
   },
-  external: ["obsidian", "electron", "@codemirror/*", "@lezer/*", "node:*"],
+  external: ["obsidian", "electron", "@codemirror/*", "node:*"],
   banner: {
     js: "/* Lindvimera — generated bundle. Licenses and adapted source are retained below. */",
   },
@@ -87,6 +87,7 @@ const options = {
         build.onEnd(async (result) => {
           if (result.errors.length === 0) {
             assertBundleBoundary(result.metafile, "production");
+            assertBundledMarkdown(result.metafile);
             const bundlePath = join(distributionDirectory, "main.js");
             const footer = await Promise.all(
               retainedFiles.map(async (file) => {

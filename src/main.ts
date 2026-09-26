@@ -22,6 +22,7 @@ import { editorSession, lindvimeraEditor } from "./runtime/editor";
 import { installMarkdownCommands } from "./markdown";
 import { installTableCommands } from "./table/session";
 import { LindvimeraSettingTab } from "./settings-tab";
+import { openCommandGuide } from "./ui/guide";
 import { internalRuntime } from "./runtime/internal";
 import { budouxSegmenter, type JapaneseSegmenter } from "./word";
 import { JapaneseWordService, type LinderaMode } from "./word/service";
@@ -212,6 +213,11 @@ export default class LindvimeraPlugin extends Plugin {
     );
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshEditors()));
     this.addCommand({
+      id: "open-guide",
+      name: "操作ガイド",
+      callback: () => openCommandGuide(this.app, () => this.settings),
+    });
+    this.addCommand({
       id: "toggle-enabled",
       name: "Toggle enabled",
       callback: () => {
@@ -246,9 +252,11 @@ export default class LindvimeraPlugin extends Plugin {
 
   private applyBindings(): void {
     for (const binding of this.bindings) Vim.unmap(binding.from, binding.mode);
-    this.bindings = analyseKeyBindings(this.settings.keyBindings).active.map((binding) => ({
-      ...binding,
-    }));
+    this.bindings = analyseKeyBindings(this.settings.keyBindings, this.settings).active.map(
+      (binding) => ({
+        ...binding,
+      }),
+    );
     for (const binding of this.bindings) Vim.map(binding.from, binding.to, binding.mode);
   }
 

@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file records notices for the Vim engine, Neovim word-object traversal, Lindera/IPADIC, and the BudouX fallback parser/model bundled with Lindvimera. Lindvimera's original source is distributed under the MIT license in `LICENSE`; adapted portions and dependencies retain their original licenses below.
+This file records notices for the Vim engine, Lezer Markdown parser and dependencies, Neovim word-object traversal, Lindera/IPADIC, and the BudouX fallback parser/model bundled with Lindvimera. Lindvimera's original source is distributed under the MIT license in `LICENSE`; adapted portions and dependencies retain their original licenses below.
 
 The standard Obsidian installation consists of `main.js`, `manifest.json`, and `styles.css`. `main.js` retains the complete `LICENSE`, this document, `src/word/text-object.ts`, `lindera/LICENSE`, and `lindera/ipadic/NOTICE.txt` in readable line comments labeled with their paths at its end. These files are also included separately in the release ZIP.
 
@@ -41,6 +41,69 @@ The Vim core also carries this attribution:
 ```text
 CodeMirror, copyright (c) by Marijn Haverbeke and others
 Distributed under an MIT license: https://codemirror.net/5/LICENSE
+```
+
+## Lezer Markdown parser
+
+- Package: `@lezer/markdown` 1.7.2, bundled from the npm distribution pinned by `pnpm-lock.yaml`.
+- Project: [lezer/markdown](https://code.haverbeke.berlin/lezer/markdown).
+- The previous GitHub repository was archived as part of the [April 15, 2026 migration to Forgejo](https://discuss.codemirror.net/t/codemirrors-migration-to-forgejo/9706/8).
+- Source of the following notice: the installed package's unmodified `LICENSE`.
+- Lindvimera configures the parser with its TaskList extension and extracts source ranges. The parser source is not locally modified.
+
+```text
+MIT License
+
+Copyright (C) 2020 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+## Lezer common and highlight
+
+- Packages: `@lezer/common` 1.5.2 and `@lezer/highlight` 1.2.3, bundled as private dependencies of the Markdown parser.
+- Projects: [lezer/common](https://code.haverbeke.berlin/lezer/common) and [lezer/highlight](https://code.haverbeke.berlin/lezer/highlight).
+- Source of the following identical notice: each installed package's unmodified `LICENSE`.
+- These bundled parser dependencies do not replace the host's CodeMirror packages, which remain external.
+
+```text
+MIT License
+
+Copyright (C) 2018 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## Neovim word-object traversal
@@ -421,7 +484,7 @@ SOFTWARE.
 
 ## Host-provided modules and development tools
 
-The build externalizes Obsidian, Electron, `@codemirror/*`, `@lezer/*`, and Node.js built-ins (`node:*`); those modules are supplied by the Obsidian desktop host. Build and test tools are development dependencies and are not bundled into `main.js`. Their original package notices remain with their installed distributions.
+The build externalizes Obsidian, Electron, `@codemirror/*`, and Node.js built-ins (`node:*`); those modules are supplied by the Obsidian desktop host. The Markdown parser and its private Lezer dependencies are bundled and attributed above. Build and test tools are development dependencies and are not bundled into `main.js`. Their original package notices remain with their installed distributions.
 
 ## Apache License, Version 2.0
 

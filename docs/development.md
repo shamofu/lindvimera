@@ -33,7 +33,9 @@ pnpm check
 
 LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストールした`lindera-wasm`パッケージを使用します。`scripts/lindera-assets.mjs`は別配布のIPADIC辞書ZIPだけを取得し、SHA-256を検証して展開します。完全辞書9ファイルは比較検証用にcacheへ保持し、配布物には`dict.words`・`dict.wordsidx`を除く7ファイルを同梱します。同梱する各ファイルのバイト列と語彙は変更しません。初回取得にはネットワークが必要で、以後はcache内のZIPも毎回検証して利用します。`dist/`、`.generated/`、`.cache/`、`.test-runtime/`、`.release/`、`.release-gate/`は生成物としてGit管理から除外します。
 
-`obsidian`、`electron`、`@codemirror/*`、`@lezer/*`、`node:*`はObsidian desktopが提供するため外部依存にします。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
+`obsidian`、`electron`、`@codemirror/*`、`node:*`はObsidian desktopが提供するため外部依存にします。構造解析用の`@lezer/markdown` 1.7.2と、その依存である`@lezer/common` 1.5.2・`@lezer/highlight` 1.2.3は本体に同梱します。このparserの構文木は内部でのみ使用し、ホストへ渡すのは原文の数値offsetだけです。ホスト提供のCodeMirrorと共有する構文木・StateFieldへ混ぜません。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
+
+Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)です。GitHub側のアーカイブは2026年4月15日の[移転](https://discuss.codemirror.net/t/codemirrors-migration-to-forgejo/9706/8)によるものです。採用版はnpmパッケージとlockfileで固定し、更新時は公式配布情報・移転先の変更履歴・必要APIを照合します。現在の最新版であることを前提にはしません。
 
 ## 実装の境界
 
@@ -44,8 +46,10 @@ LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストー�
 | `src/navigation`                 | ノート内のマーク・ジャンプリスト、編集差分による位置追跡          |
 | `src/ex`                         | Exの構文・範囲検証、編集・検索、確認付き置換                      |
 | `src/input`                      | 対応操作、UI・モード別の入力優先順位、挿入脱出キーと候補表示      |
+| `src/ui`                         | キー割り当てフォーム、検索可能な操作ガイド                        |
 | `src/word`                       | 辞書サービス、単語・文・書記素境界、テキストオブジェクト、行cache |
 | `src/markdown`                   | Markdown構造、テキストオブジェクト、Surround                      |
+| `src/folding`                    | ホストの折り畳み範囲・状態とVim操作の接続                         |
 | `src/table`                      | セルと親文書の座標対応、セル移動、ネイティブadapter               |
 | `test/probe`                     | 配布対象外の検証プラグイン、検証画面と入力診断・記録              |
 | `patches`                        | 上流への汎用拡張点と対応する回帰テスト                            |
@@ -56,9 +60,23 @@ LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストー�
 
 本文用ScopeとDOM入力は共通の入口を使い、一つのイベントを一度だけ判定・実行します。IME中のキーや検索欄・モーダルには本文のキー処理を適用しません。候補表示中のEscは候補だけを閉じ、その次のEscでモードを解除します。`Ctrl-[`も編集面で同じ取消規則です。NormalのEscは本文・セルから退出しません。
 
-`src/input/policy.ts`の対応一覧にモード遷移とoperator情報をまとめ、engineの候補選択、割り当て検証、テストの基準にします。部分一致・完全一致の両方を制限し、非対応操作を間接再生からも実行しません。文字引数、Insert文字列、検索語、Ex入力はコマンドと区別します。不成立のキー列は待機を解除して終了し、接頭辞や後続文字をホストへ再送しません。非対応の割り当ては保存内容を保持して適用だけを停止します。
+`src/input/commands.ts`に対応キー・モード遷移・operator・機能設定の情報をまとめ、`policy.ts`によるengineの候補選択・割り当て検証と、`catalog.ts`によるガイド表示の基準にします。部分一致・完全一致の両方を制限し、非対応操作を間接再生からも実行しません。文字引数、Insert文字列、検索語、Ex入力はコマンドと区別します。不成立のキー列は待機を解除して終了し、接頭辞や後続文字をホストへ再送しません。非対応の割り当ては保存内容を保持して適用だけを停止します。
+
+割り当てフォームは保存済みの`keyBindings`を複製したdraftを編集し、「適用」で検証・保存、「取り消す」で再読込します。保存形式は従来の`{ mode, from, to }[]`を維持し、JSON入力欄は表示しません。空欄・不正形式・重複・循環は適用を止め、未対応操作は理由とともに保存内容を保持します。`folding`と`showPendingHints`は既定で`true`とし、古い設定に値がなければ既定値を補います。
+
+ガイドと入力待ちの候補は表示専用です。候補はengineの`getPendingCommands`から、現在のモード・ユーザー割り当て・CommandPolicyで有効なものを取得します。未完入力が500ms続いたときに表示し、Insert／Replace、IME、専用入力UI、マクロ記録・再生中は抑制します。DOM表示からキーの実行、選択・フォーカス・履歴の変更を行いません。
 
 脱出候補は表示だけを先行し、成立時に本文や挿入記録へ混入させません。保留中のEscでは候補を本文へ一度確定してから脱出します。Insert中の実際のカーソル移動と内部更新を区別してUndoを区切ります。モード表示ではReplace、Visual各種、未完入力、マクロ記録を区別します。
+
+## Markdown構造と折り畳み
+
+`src/markdown/blocks.ts`は`@lezer/markdown`の`parser.configure(TaskList)`で原文を解析します。frontmatterだけを同じUTF-16長・改行位置の空白へ置き換えてから解析し、文書直下のATX／Setext見出しと、引用外のListItemから範囲・親子関係を作ります。リストの継続行・子項目・コード・水平線の判定をインデントの正規表現だけで代用しません。既存のインラインオブジェクトと構造移動の索引は維持し、同じ文書revisionの索引を再利用します。
+
+`ih/ah/iL/aL`のカウント1は現在位置を含む最も内側の対象で、1増えるごとに親を一つたどります。`ih/ah/aL`は行単位、`iL`は文字単位で、operatorとVisualの端点規則を変換して既存dispatcherへ渡します。対象・内容・必要な親がなければ範囲を返さず、`c`でも挿入・レジスタ更新を起こしません。ネイティブセルでは親ノートの座標へ暗黙に切り替えません。
+
+折り畳みは構造オブジェクト用parserと分け、ホストの`foldable`・`foldedRanges`・fold/unfold effectを使います。Normalでは`za/zo/zc/zA/zO/zC/zR/zM`、Visualでは`zo/zc/zO/zC`だけを受け付け、現在の本文ペインへ適用します。小文字操作のカウントは階層数、大文字操作は再帰・全体処理です。閉じている範囲へカーソルを残さず、Visual適用後はNormalへ戻します。
+
+閉じる範囲の収集にはホストの解析完了を待ち、共通continuationで後続のマッピング・マクロを保留します。解析と走査はUIへ制御を戻しながら進め、完了前に文書・ノート・編集対象が変わった場合や取消時には効果を適用しません。折り畳みは本文・レジスタ・Undo履歴と`.`の編集記録を変更しません。状態の所有と保存はホストへ任せます。
 
 ## 単語境界と辞書の寿命
 
@@ -110,7 +128,7 @@ npmの検査だけでは、GitサブモジュールのVim、独自patch、WASM�
 
 `pnpm check`で本体・テスト・配布物を検査します。`typecheck`は上流ソースを準備した後、3回の`tsc`コマンドで上流JavaScriptの型宣言、`tsconfig.vendor.json`によるwrapperの型宣言、本体・テストの型検査を順に実行します。上流の型宣言生成は`--noCheck`、本体とテストはstrict設定を使います。整形・静的解析の対象外は各設定ファイルに定義し、上流ソース、patch本文、内容保持が必要なfixtureを一括整形しません。
 
-`eslint-plugin-obsidianmd`の推奨設定は本体ソースとmanifest・package情報を対象とし、テスト・生成物・上流ソースを除外します。型情報を使うため、`pnpm lint:obsidian`は`pnpm typecheck`の後に実行します。Oxlintと併用し、警告も失敗として扱います。設定画面は`getSettingDefinitions()`で検索に対応し、日本語の表示、JSONの検証とエラー、保存・反映を実機でも確認します。
+`eslint-plugin-obsidianmd`の推奨設定は本体ソースとmanifest・package情報を対象とし、テスト・生成物・上流ソースを除外します。型情報を使うため、`pnpm lint:obsidian`は`pnpm typecheck`の後に実行します。Oxlintと併用し、警告も失敗として扱います。設定画面は`getSettingDefinitions()`で検索に対応し、日本語の表示、キー割り当てフォームの検証とエラー、下書き・適用・取消、操作ガイドを実機でも確認します。
 
 Vitestは`test/**/*.test.ts`の機能テストを実行します。`test/word/native-objects.json`はNeovimの動作に対応する固定期待値です。単体テストはこのfixtureを直接読み込み、Neovimを実行しません。設定の不正値回復、辞書失敗・破棄、provider交換、入力・履歴・セルの回帰テストとfixtureを維持します。
 

@@ -1,3 +1,5 @@
+import { indexMarkdownBlocks, type MarkdownBlocks } from "./blocks";
+
 export interface TextRange {
   from: number;
   to: number;
@@ -14,7 +16,7 @@ interface Structure {
   indent: number;
 }
 
-export interface MarkdownIndex {
+export interface MarkdownIndex extends MarkdownBlocks {
   headings: Structure[];
   lists: Structure[];
   objects: MarkdownObject[];
@@ -209,7 +211,7 @@ export function indexMarkdown(text: string): MarkdownIndex {
       to: text.length,
       inner: { from: Math.min(fence.innerFrom, text.length), to: text.length },
     });
-  return { headings, lists, objects };
+  return { headings, lists, objects, ...indexMarkdownBlocks(text) };
 }
 
 export function structureMotion(

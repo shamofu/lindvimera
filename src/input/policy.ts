@@ -7,184 +7,9 @@ import type {
 import type { KeyBinding, LindvimeraSettings, VimMode } from "../settings";
 import { parseEx } from "../ex/parser";
 
-const movementModes: readonly VimMode[] = ["normal", "visual", "operatorPending"];
-const selectionModes: readonly VimMode[] = ["normal", "visual"];
-const operatorCommands = {
-  d: "delete",
-  c: "change",
-  y: "yank",
-  "=": "indentAuto",
-  ">": "indent",
-  "<": "indent",
-  gu: "changeCase",
-  gU: "changeCase",
-  "g~": "changeCase",
-} as const;
-
-interface SupportedCommand {
-  keys: string;
-  contexts: readonly VimMode[];
-  operator?: string;
-  enters?: "insert" | "visual" | "normal";
-  visualKind?: "character" | "line" | "block";
-  togglesVisual?: boolean;
-}
-
-/** The finite public editing vocabulary. Literal arguments are checked separately. */
-export const SUPPORTED_COMMANDS: readonly SupportedCommand[] = [
-  { keys: ":", contexts: selectionModes, enters: "normal" },
-  ...Object.entries(operatorCommands).map(([keys, operator]) => ({
-    keys,
-    operator,
-    contexts: movementModes,
-  })),
-  ...[
-    "h",
-    "j",
-    "k",
-    "l",
-    "w",
-    "W",
-    "b",
-    "B",
-    "e",
-    "E",
-    "ge",
-    "gE",
-    "{",
-    "}",
-    "(",
-    ")",
-    "+",
-    "-",
-    "_",
-    "0",
-    "^",
-    "$",
-    "gg",
-    "G",
-    "f<character>",
-    "F<character>",
-    "t<character>",
-    "T<character>",
-    ";",
-    ",",
-    "%",
-    "gj",
-    "gk",
-    "<C-f>",
-    "<C-b>",
-    "<C-d>",
-    "<C-u>",
-    "H",
-    "M",
-    "L",
-    "<Left>",
-    "<Right>",
-    "<Up>",
-    "<Down>",
-    "g<Up>",
-    "g<Down>",
-    "<Home>",
-    "<End>",
-    "<PageUp>",
-    "<PageDown>",
-    "<BS>",
-    "n",
-    "N",
-    "*",
-    "#",
-    "g*",
-    "g#",
-  ].map((keys) => ({ keys, contexts: movementModes })),
-  ...["gn", "gN"].map((keys) => ({
-    keys,
-    contexts: movementModes,
-    enters: "visual" as const,
-    visualKind: "character" as const,
-  })),
-  ...["x", "X", "D", "Y", "p", "P", "J", "gJ", "~", "r<character>", "<Del>"].map((keys) => ({
-    keys,
-    contexts: selectionModes,
-    enters: "normal" as const,
-  })),
-  ...["<C-r>", "zz", "zt", "zb", '"<register>', "<C-[>", "<C-c>", "/", "?"].map((keys) => ({
-    keys,
-    contexts: selectionModes,
-  })),
-  ...["I", "A", "R", "C", "s", "S"].map((keys) => ({
-    keys,
-    contexts: selectionModes,
-    enters: "insert" as const,
-  })),
-  ...(["v", "V", "<C-v>"] as const).map((keys) => ({
-    keys,
-    contexts: selectionModes,
-    enters: "visual" as const,
-    visualKind: ({ v: "character", V: "line", "<C-v>": "block" } as const)[keys],
-    togglesVisual: true,
-  })),
-  { keys: "gv", contexts: selectionModes, enters: "visual" },
-  ...["i", "a", "o", "O"].map((keys) => ({
-    keys,
-    contexts: ["normal"] as readonly VimMode[],
-    enters: "insert" as const,
-  })),
-  ...[
-    "u",
-    ".",
-    "q<register>",
-    "@<register>",
-    "m<register>",
-    "'<register>",
-    "`<register>",
-    "<C-o>",
-    "<C-i>",
-    "<CR>",
-  ].map((keys) => ({
-    keys,
-    contexts: ["normal"] as readonly VimMode[],
-  })),
-  ...["o", "O"].map((keys) => ({ keys, contexts: ["visual"] as readonly VimMode[] })),
-  ...["u", "U"].map((keys) => ({
-    keys,
-    contexts: ["visual"] as readonly VimMode[],
-    enters: "normal" as const,
-  })),
-  ...["i<register>", "a<register>"].map((keys) => ({
-    keys,
-    contexts: ["visual", "operatorPending"] as readonly VimMode[],
-  })),
-  { keys: "<C-[>", contexts: ["insert", "operatorPending"] },
-  { keys: "<C-c>", contexts: ["operatorPending"] },
-  { keys: "<Esc>", contexts: ["normal", "insert", "visual", "operatorPending"] },
-];
-
-export const SUPPORTED_EXTENSION_KEYS = [
-  "gf",
-  "[h",
-  "]h",
-  "[l",
-  "]l",
-  "i*",
-  "a*",
-  "i_",
-  "a_",
-  "i`",
-  "a`",
-  "il",
-  "al",
-  "iC",
-  "aC",
-  "ys",
-  "ds",
-  "cs",
-  "gS",
-  "<Tab>",
-  "<S-Tab>",
-  "[t",
-  "]t",
-] as const;
+import { operatorCommands, SUPPORTED_COMMANDS, SUPPORTED_EXTENSIONS } from "./commands";
+import type { SupportedCommand } from "./commands";
+export { SUPPORTED_COMMANDS, SUPPORTED_EXTENSION_KEYS } from "./commands";
 
 const nativeInsertKeys = new Set([
   "<CR>",
@@ -294,7 +119,10 @@ export interface KeyBindingIssue {
 }
 
 /** Keep saved definitions intact and disable only invalid definitions/dependents. */
-export function analyseKeyBindings(bindings: readonly KeyBinding[]): {
+export function analyseKeyBindings(
+  bindings: readonly KeyBinding[],
+  settings?: LindvimeraSettings,
+): {
   active: KeyBinding[];
   issues: KeyBindingIssue[];
 } {
@@ -313,16 +141,21 @@ export function analyseKeyBindings(bindings: readonly KeyBinding[]): {
     if (chain.has(binding)) return "循環するキー割り当てです。";
     if (/^(?:<Esc>|<C-\[>)$/i.test(binding.from)) return "EscとCtrl-[は取消操作専用です。";
     const next = new Set(chain).add(binding);
-    const reason = validateSequence(binding.to, binding.mode, (remaining, mode) => {
-      const dependency = bindings
-        .filter((candidate) => candidate.mode === mode && remaining.startsWith(candidate.from))
-        .sort((a, b) => a.from.length - b.from.length)[0];
-      if (!dependency) return;
-      const error = validate(dependency, next);
-      return error
-        ? { error: `参照先の割り当てが無効です: ${dependency.from} (${error})` }
-        : dependency;
-    });
+    const reason = validateSequence(
+      binding.to,
+      binding.mode,
+      (remaining, mode) => {
+        const dependency = bindings
+          .filter((candidate) => candidate.mode === mode && remaining.startsWith(candidate.from))
+          .sort((a, b) => a.from.length - b.from.length)[0];
+        if (!dependency) return;
+        const error = validate(dependency, next);
+        return error
+          ? { error: `参照先の割り当てが無効です: ${dependency.from} (${error})` }
+          : dependency;
+      },
+      settings,
+    );
     checked.add(binding);
     if (reason) failures.set(binding, reason);
     return reason;
@@ -341,6 +174,7 @@ function validateSequence(
   sequence: string,
   initialMode: VimMode,
   expand: (remaining: string, mode: VimMode) => KeyBinding | { error: string } | undefined,
+  settings?: LindvimeraSettings,
 ): string | undefined {
   if (/[\r\n]/u.test(sequence)) return "キー列の改行には<CR>を指定してください。";
   const tokens = sequence.match(/<[^>]+>|./gu) ?? [];
@@ -421,6 +255,7 @@ function validateSequence(
     }
     count = false;
     if (!pending && ["c", "d", "y", "ys"].includes(operator) && token === "s") {
+      if (settings && !settings.surround) return "Surroundが設定で無効です。";
       if (operator === "c" || operator === "d") {
         surround = operator === "c" ? 2 : 1;
         operator = "";
@@ -441,7 +276,20 @@ function validateSequence(
       const prefix = entry.keys.replace(/<(character|register)>$/, "");
       return prefix !== entry.keys && pending.startsWith(prefix) && pending.length > prefix.length;
     });
-    const extension = SUPPORTED_EXTENSION_KEYS.some((keys) => keys === pending);
+    const extensionCandidate = SUPPORTED_EXTENSIONS.find(
+      (entry) => entry.keys === pending && entry.contexts.includes(mode),
+    );
+    // Markdown backticks override Vim's quote object only while enabled. Keep
+    // mappings to the native object usable when that extension is switched off.
+    const nativeObject =
+      literal && /^[ia]<register>$/.test(literal.keys) && textObjects.has(pending.slice(1));
+    const extension =
+      nativeObject &&
+      extensionCandidate?.feature &&
+      settings &&
+      !settings[extensionCandidate.feature]
+        ? undefined
+        : extensionCandidate;
     if (literal && !extension) {
       if (literal.keys.startsWith("i<") || literal.keys.startsWith("a<")) {
         if (!textObjects.has(pending.slice(1)))
@@ -462,6 +310,8 @@ function validateSequence(
       continue;
     }
     if (exact || extension) {
+      if (extension?.feature && settings && !settings[extension.feature])
+        return `対応する機能が設定で無効です: ${extension.keys}`;
       const completed = pending;
       pending = "";
       if (completed === ":") ex = mode === "visual" ? "'<,'>" : "";
@@ -480,10 +330,15 @@ function validateSequence(
       } else if (completed === "gS") {
         surround = 1;
         mode = "normal";
+      } else if (extension?.feature === "folding") {
+        mode = "normal";
+        visualKind = undefined;
       } else if (mode === "operatorPending") {
         mode = operator === "c" ? "insert" : "normal";
         if (operator === "ys") surround = 1;
         operator = "";
+      } else if (mode === "visual" && ["ih", "ah", "aL", "iL"].includes(completed)) {
+        visualKind = completed === "iL" ? "character" : "line";
       } else if (exact?.enters === "visual") {
         if (exact.togglesVisual && mode === "visual" && visualKind === exact.visualKind) {
           mode = "normal";
@@ -497,7 +352,9 @@ function validateSequence(
     }
     const partial =
       commands.some((entry) => entry.keys.startsWith(pending)) ||
-      SUPPORTED_EXTENSION_KEYS.some((keys) => keys.startsWith(pending));
+      SUPPORTED_EXTENSIONS.some(
+        (entry) => entry.contexts.includes(mode) && entry.keys.startsWith(pending),
+      );
     if (!partial) return `未対応の操作を含んでいます: ${pending}`;
   }
   if (ex?.trim()) {
@@ -511,6 +368,7 @@ function validateSequence(
 }
 
 function extensionEnabled(name: string, settings: LindvimeraSettings): boolean {
+  if (name.startsWith("lindvimeraFold")) return settings.folding;
   if (name.startsWith("lindvimeraSurround")) return settings.surround;
   if (name.startsWith("lindvimeraObject")) return settings.textObjects;
   if (name === "lindvimeraheading" || name === "lindvimeralist") return settings.markdownMotions;
@@ -525,6 +383,7 @@ export function installCommandPolicy(
 ): () => void {
   const previous = cm.state.commandPolicy;
   let previousBindings: readonly KeyBinding[] | undefined;
+  let previousFeatures = "";
   let bindings: KeyBinding[] = [];
   const policy: CommandPolicy = {
     allowsEx(command) {
@@ -534,9 +393,17 @@ export function installCommandPolicy(
     },
     allows(command, context, keys) {
       const current = settings();
-      if (previousBindings !== current.keyBindings) {
+      const features = [
+        current.markdownMotions,
+        current.textObjects,
+        current.surround,
+        current.tables,
+        current.folding,
+      ].join(",");
+      if (previousBindings !== current.keyBindings || previousFeatures !== features) {
         previousBindings = current.keyBindings;
-        bindings = analyseKeyBindings(current.keyBindings).active;
+        previousFeatures = features;
+        bindings = analyseKeyBindings(current.keyBindings, current).active;
       }
       if (
         command.type === "keyToKey" &&

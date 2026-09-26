@@ -15,8 +15,10 @@ export interface LindvimeraSettings {
   markdownMotions: boolean;
   textObjects: boolean;
   surround: boolean;
+  folding: boolean;
   tables: boolean;
   showStatus: boolean;
+  showPendingHints: boolean;
   escapeSequences: string[];
   escapeTimeoutMs: number;
   keyBindings: KeyBinding[];
@@ -29,8 +31,10 @@ export const DEFAULT_SETTINGS: LindvimeraSettings = {
   markdownMotions: true,
   textObjects: true,
   surround: true,
+  folding: true,
   tables: true,
   showStatus: true,
+  showPendingHints: true,
   escapeSequences: [],
   escapeTimeoutMs: 200,
   keyBindings: [],
@@ -88,8 +92,10 @@ export function loadSettings(value: unknown): LindvimeraSettings {
     "markdownMotions",
     "textObjects",
     "surround",
+    "folding",
     "tables",
     "showStatus",
+    "showPendingHints",
   ] as const;
   for (const key of flags) if (typeof data[key] === "boolean") result[key] = data[key];
   result.linderaMode = data.linderaMode === "decompose" ? "decompose" : "normal";

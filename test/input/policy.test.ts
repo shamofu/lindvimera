@@ -146,6 +146,31 @@ describe("per-editor supported editing policy", () => {
 
 describe("mapping migration", () => {
   it.each([
+    ["di`", "`` tail"],
+    ["da`", " tail"],
+    ["vi`d", "`` tail"],
+    ["va`d", " tail"],
+  ])(
+    "keeps native backtick mapping %s usable when Markdown objects are disabled",
+    (to, expected) => {
+      const { cm, view, settings, rejected } = editor("`alpha` tail");
+      settings.textObjects = false;
+      settings.keyBindings = [{ mode: "normal", from: "Q", to }];
+      expect(analyseKeyBindings(settings.keyBindings, settings).issues).toEqual([]);
+      Vim.map("Q", to, "normal");
+      try {
+        keys(cm, "Q");
+        expect(view.state.doc.toString()).toBe(expected);
+        expect(rejected).toEqual([]);
+      } finally {
+        Vim.unmap("Q", "normal");
+      }
+      expect(
+        analyseKeyBindings([{ mode: "normal", from: "Q", to: "dih" }], settings).issues,
+      ).toHaveLength(1);
+    },
+  );
+  it.each([
     ":%s/😀/x/g<CR>@:",
     "Vj:delete a<CR>",
     ":1,$sort! iu<CR>",

@@ -2,6 +2,7 @@ import { ItemView, MarkdownView, TFile, apiVersion, type WorkspaceLeaf } from "o
 import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { history, undo, redo, undoDepth } from "@codemirror/commands";
+import { foldedRanges } from "@codemirror/language";
 import type LindvimeraPlugin from "../../src/main";
 import type { LinderaMode } from "../../src/word/service";
 import type { LindvimeraSettings } from "../../src/settings";
@@ -1062,6 +1063,73 @@ export class ProbeView extends ItemView {
       requireCheck(
         cellBounds.bottom > viewportBounds.top && cellBounds.top < viewportBounds.bottom,
         "Restored native cell remains outside the visible editor.",
+      );
+    });
+    await nativeCheck("native-folded-table-mark-restoration", async () => {
+      focus(1, 1, 5);
+      const previous = context().cellView;
+      const before = parent.state.doc.toString();
+      const depth = undoDepth(parent.state);
+      const folds = () => {
+        const ranges: { from: number; to: number }[] = [];
+        foldedRanges(parent.state).between(0, parent.state.doc.length, (from, to) => {
+          ranges.push({ from, to });
+        });
+        return ranges;
+      };
+      const beforeFolds = JSON.stringify(folds());
+      await domKeys("mf");
+      for (const command of ["za", "zo", "zc", "zA", "zO", "zC", "zM", "zR"]) {
+        await domKeys(command);
+        requireCheck(
+          JSON.stringify(folds()) === beforeFolds && atCell(1, 1, 5),
+          `Native-cell ${command} changed parent folds or moved the cell cursor.`,
+        );
+        requireCheck(
+          !editorSession(parent)?.pending.pending,
+          `Native-cell ${command} started a parent folding operation.`,
+        );
+      }
+      await domKeys("[tggzc");
+      await waitNavigation(
+        () =>
+          folds().some((fold) => fold.from < original.from && fold.to >= original.to) &&
+          !editorSession(parent)?.table.nativeInputView() &&
+          [...parent.dom.querySelectorAll("table")].every(
+            (table) => !table.getClientRects().length,
+          ),
+        "Closing the parent heading did not hide the native table.",
+      );
+      requireCheck(
+        previous && !previous.dom.isConnected,
+        "The previous native cell was not destroyed.",
+      );
+      await domKeys("`f");
+      await waitNavigation(
+        () => atCell(1, 1, 5),
+        "A mark could not restore a native cell hidden inside a folded heading.",
+      );
+      requireCheck(
+        !folds().some((fold) => fold.from < original.from && fold.to >= original.to),
+        "Native mark restoration left the containing heading folded.",
+      );
+      requireCheck(
+        context().cellView !== previous && context().cellView?.hasFocus,
+        "Folded-table restoration did not recreate and focus the native cell.",
+      );
+      const cellBounds = context().cellView!.dom.getBoundingClientRect();
+      const viewportBounds = parent.scrollDOM.getBoundingClientRect();
+      requireCheck(
+        cellBounds.bottom > viewportBounds.top && cellBounds.top < viewportBounds.bottom,
+        "The restored cell is not visible after opening its parent heading.",
+      );
+      requireCheck(
+        parent.state.doc.toString() === before,
+        "Folded-table navigation changed the note.",
+      );
+      requireCheck(
+        undoDepth(parent.state) === depth,
+        "Folded-table navigation added a text Undo entry.",
       );
     });
     await nativeCheck("native-navigation-replay-order", async () => {

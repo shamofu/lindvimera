@@ -4,6 +4,24 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
+/** These private parser trees must not depend on the host's Lezer module versions. */
+export function assertBundledMarkdown(metafile) {
+  const inputs = Object.keys(metafile.inputs ?? {}).map((path) => path.replaceAll("\\", "/"));
+  for (const name of ["markdown", "common", "highlight"])
+    assert(
+      inputs.some((path) => path.includes(`node_modules/@lezer/${name}/`)),
+      `The production bundle must include @lezer/${name}.`,
+    );
+  for (const output of Object.values(metafile.outputs ?? {}))
+    for (const imported of output.imports ?? [])
+      assert(
+        !(
+          imported.external && /^@lezer\/(?:markdown|common|highlight)(?:\/|$)/.test(imported.path)
+        ),
+        `Private parser dependency escaped the bundle: ${imported.path}`,
+      );
+}
+
 export function assertBundleBoundary(metafile, kind) {
   assert(metafile?.inputs, "The bundle must provide an esbuild input inventory.");
   assert(["production", "harness"].includes(kind), `Unknown bundle kind: ${kind}`);

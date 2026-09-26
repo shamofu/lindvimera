@@ -8,6 +8,7 @@ vi.mock("obsidian", () => ({
     refreshDomState = vi.fn();
   },
 }));
+vi.mock("../src/ui/guide", () => ({ openCommandGuide: vi.fn() }));
 
 function setup(initial: Partial<LindvimeraSettings> = {}) {
   const host = {
@@ -47,7 +48,9 @@ describe("searchable settings", () => {
       "textObjects",
       "surround",
       "tables",
+      "folding",
       "showStatus",
+      "showPendingHints",
       "escapeSequences",
       "escapeTimeoutMs",
     ]);
@@ -116,7 +119,9 @@ describe("settings persistence", () => {
       "textObjects",
       "surround",
       "tables",
+      "folding",
       "showStatus",
+      "showPendingHints",
     ])
       await tab.setControlValue(key, false);
     await tab.setControlValue("escapeSequences", '["jk"]');
@@ -125,7 +130,7 @@ describe("settings persistence", () => {
     expect(host.saveSettings.mock.calls).toEqual([
       [true],
       [true],
-      ...Array.from({ length: 9 }, () => [false]),
+      ...Array.from({ length: 11 }, () => [false]),
     ]);
   });
 
@@ -176,6 +181,23 @@ describe("settings persistence", () => {
     expect(host.saveSettings).not.toHaveBeenCalled();
   });
 
+  it("restores previous mappings and reapplies them when persistence rejects", async () => {
+    const original = [{ mode: "normal" as const, from: "Q", to: "dw" }];
+    const { host, tab } = setup({ keyBindings: original });
+    const previous = host.settings.keyBindings;
+    const observed: unknown[] = [];
+    host.saveSettings.mockImplementation(async () => {
+      observed.push(structuredClone(host.settings.keyBindings));
+      throw new Error("disk unavailable");
+    });
+    await expect(
+      tab.setControlValue("keyBindings", '[{"mode":"normal","from":"Q","to":"yw"}]'),
+    ).rejects.toThrow("disk unavailable");
+    expect(host.settings.keyBindings).toBe(previous);
+    expect(observed).toEqual([[{ mode: "normal", from: "Q", to: "yw" }], original]);
+    expect(tab.refreshDomState).not.toHaveBeenCalled();
+  });
+
   it("preserves unsupported mappings and refreshes their warning through the custom editor", async () => {
     const { host, tab } = setup();
     const unsupported = [{ mode: "normal", from: "Z", to: ":write<CR>" }];
@@ -183,39 +205,32 @@ describe("settings persistence", () => {
     expect(host.settings.keyBindings).toEqual(unsupported);
     const definition = rows(tab).find((item) => item.render);
     if (!definition?.render) throw new Error("Missing mapping editor.");
-    const issues = document.createElement("div");
-    let currentText = "";
-    let onChange: ((value: string) => void | Promise<void>) | undefined;
-    const input = {
-      setValue(value: string) {
-        currentText = value;
-        return input;
-      },
-      onChange(callback: (value: string) => void | Promise<void>) {
-        onChange = callback;
-        return input;
-      },
-    };
+    const element = document.createElement("div");
     definition.render(
       {
-        descEl: { createDiv: () => issues },
-        addTextArea: (callback: (component: typeof input) => void) => callback(input),
+        settingEl: element,
+        controlEl: element,
       } as unknown as Setting,
       {} as SettingGroup,
     );
-    expect(JSON.parse(currentText)).toEqual(unsupported);
-    expect(issues.textContent).toContain("normal: Z → :write<CR>");
-    expect(issues.textContent).toContain("未対応");
-    if (!onChange) throw new Error("The mapping editor did not register its change handler.");
+    expect(element.querySelector("textarea")).toBeNull();
+    expect(element.textContent).toContain("未対応");
+    const inputs = element.querySelectorAll("input");
+    expect(inputs[0].value).toBe("Z");
+    expect(inputs[1].value).toBe(":write<CR>");
     const before = structuredClone(host.settings);
     host.saveSettings.mockClear();
-    await onChange("[");
-    expect(issues.textContent).not.toBe("");
+    inputs[1].value = "dw";
+    inputs[1].dispatchEvent(new Event("input"));
     expect(host.settings).toEqual(before);
     expect(host.saveSettings).not.toHaveBeenCalled();
-    await onChange('[{"mode":"normal","from":"Q","to":"dw"}]');
-    expect(host.settings.keyBindings).toEqual([{ mode: "normal", from: "Q", to: "dw" }]);
-    expect(issues.textContent).toBe("");
+    const apply = Array.from(element.querySelectorAll("button")).find(
+      (button) => button.textContent === "適用",
+    );
+    apply!.click();
+    await vi.waitFor(() => expect(host.saveSettings).toHaveBeenCalledOnce());
+    expect(host.settings.keyBindings).toEqual([{ mode: "normal", from: "Z", to: "dw" }]);
+    expect(element.querySelector(".lindvimera-setting-error")?.textContent).toBe("");
     expect(host.saveSettings).toHaveBeenCalledExactlyOnceWith(false);
   });
 });

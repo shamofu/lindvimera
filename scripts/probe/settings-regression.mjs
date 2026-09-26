@@ -84,19 +84,76 @@ export async function runSettingsRegression(page) {
       await timeout.locator("input").fill("350");
       const mappings = row("モード別キー割り当て");
       const valid = [{ mode: "normal", from: "H", to: "0" }];
-      await mappings.locator("textarea").fill(JSON.stringify(valid));
+      const mappingRows = mappings.locator(".lindvimera-mapping-row");
+      while (await mappingRows.count())
+        await mappingRows
+          .first()
+          .getByRole("button", { name: /削除/ })
+          .click();
+      await mappings.getByRole("button", { name: "割り当てを追加", exact: true }).click();
+      const from = mappings.getByRole("textbox", { name: "割り当て 1 の入力キー", exact: true });
+      const to = mappings.getByRole("textbox", { name: "割り当て 1 の実行キー列", exact: true });
+      await from.fill("H");
+      await to.fill("0");
+      await mappings.getByRole("button", { name: "適用", exact: true }).click();
       await persisted("keyBindings", valid);
-      await mappings.locator("textarea").fill("[");
+      await to.fill("^");
+      assert.deepEqual((await state()).keyBindings, valid);
+      await mappings.getByRole("button", { name: "取り消す", exact: true }).click();
+      assert.equal(await to.inputValue(), "0");
+      await to.fill("H");
       await mappings
-        .locator(".lindvimera-setting-error")
-        .filter({ hasText: /JSON|Unexpected|Expected/ })
+        .getByText(/循環/)
+        .first()
         .waitFor();
+      assert.equal(
+        await mappings.getByRole("button", { name: "適用", exact: true }).isDisabled(),
+        true,
+      );
       assert.deepEqual((await state()).keyBindings, valid);
-      await mappings.locator("textarea").fill(JSON.stringify(valid));
-      await mappings.locator("textarea").fill('[{"mode":"normal","from":"j","to":"j"}]');
-      await mappings.getByText(/循環/).waitFor();
-      assert.deepEqual((await state()).keyBindings, valid);
-      await mappings.locator("textarea").fill(JSON.stringify(valid));
+      await mappings.getByRole("button", { name: "取り消す", exact: true }).click();
+      await mappings.getByRole("button", { name: "割り当てを追加", exact: true }).click();
+      await mappings.getByRole("textbox", { name: "割り当て 2 の入力キー", exact: true }).fill("H");
+      await mappings
+        .getByRole("textbox", { name: "割り当て 2 の実行キー列", exact: true })
+        .fill("^");
+      await mappings
+        .getByText(/割り当てが重複しています/)
+        .first()
+        .waitFor();
+      assert.equal(
+        await mappings.getByRole("button", { name: "適用", exact: true }).isDisabled(),
+        true,
+      );
+      await mappings.getByRole("button", { name: "取り消す", exact: true }).click();
+      await to.fill(":write<CR>");
+      await mappings.getByText(/無効.*未対応/).waitFor();
+      await mappings.getByRole("button", { name: "適用", exact: true }).click();
+      await persisted("keyBindings", [{ mode: "normal", from: "H", to: ":write<CR>" }]);
+      await to.fill("0");
+      await mappings.getByRole("button", { name: "適用", exact: true }).click();
+      await persisted("keyBindings", valid);
+    });
+    await check("settings-command-guide", async () => {
+      const before = await state();
+      await row("操作ガイド").getByRole("button", { name: "操作ガイドを開く" }).click();
+      let guide;
+      for (const candidate of page.context().pages()) {
+        const modal = candidate.locator(".lindvimera-guide-modal");
+        if (await modal.isVisible()) {
+          guide = modal;
+          break;
+        }
+      }
+      assert.ok(guide, "The searchable command guide must open.");
+      const search = guide.getByRole("searchbox", { name: "操作ガイドを検索" });
+      await search.fill("za");
+      assert.ok(await guide.locator(".lindvimera-guide-entry").count());
+      await search.fill("__lindvimera_missing_operation__");
+      await guide.getByText("一致する操作はありません。", { exact: true }).waitFor();
+      await search.press("Escape");
+      await guide.waitFor({ state: "hidden" });
+      assert.deepEqual(await state(), before);
     });
     await check("settings-japanese-switch", async () => {
       const dropdown = row("日本語の分割モード").locator('select:not([aria-hidden="true"])');
