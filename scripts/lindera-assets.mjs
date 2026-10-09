@@ -8,9 +8,9 @@ import { inflateRawSync } from "node:zlib";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageDirectory = dirname(fileURLToPath(import.meta.resolve("lindera-wasm")));
 const dictionaryArtifact = {
-  file: "lindera-ipadic-6.0.0.zip",
-  url: "https://github.com/lindera/lindera/releases/download/v6.0.0/lindera-ipadic-6.0.0.zip",
-  sha256: "8433dbbb80d7588a565fb9247c1ac7aed3ca50c7463329e495f8bd905aece356",
+  file: "lindera-ipadic-6.2.0.zip",
+  url: "https://github.com/lindera/lindera/releases/download/v6.2.0/lindera-ipadic-6.2.0.zip",
+  sha256: "5ed4bba6b429030b0387df67d40d5751d35dedef0306f4bac6d957cad5f04b72",
 };
 
 const dictionaryNames = [

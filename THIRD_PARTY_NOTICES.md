@@ -446,9 +446,9 @@ BudouX's upstream disclaimer: This is not an officially supported Google product
 ## Lindera WebAssembly
 
 - Project: [lindera/lindera](https://github.com/lindera/lindera)
-- Package: `lindera-wasm` 6.0.0, distributed under the MIT license.
+- Package: `lindera-wasm` 6.2.0, distributed under the MIT license.
 - The unmodified WebAssembly bytes are compressed and embedded in `main.js` under the logical key `lindera/lindera_wasm_bg.wasm`; its JavaScript bindings are also bundled into `main.js`.
-- The following notice is copied from the 6.0.0 npm package's `LICENSE`, also distributed as `lindera/LICENSE`.
+- The following notice is copied from the 6.2.0 npm package's `LICENSE`, also distributed as `lindera/LICENSE`.
 
 ```text
 MIT License
@@ -476,8 +476,8 @@ SOFTWARE.
 
 ## IPADIC dictionary
 
-- Artifact: `lindera-ipadic-6.0.0.zip` from the [Lindera 6.0.0 release](https://github.com/lindera/lindera/releases/tag/v6.0.0).
-- Archive SHA-256: `8433dbbb80d7588a565fb9247c1ac7aed3ca50c7463329e495f8bd905aece356`.
+- Artifact: `lindera-ipadic-6.2.0.zip` from the [Lindera 6.2.0 release](https://github.com/lindera/lindera/releases/tag/v6.2.0).
+- Archive SHA-256: `5ed4bba6b429030b0387df67d40d5751d35dedef0306f4bac6d957cad5f04b72`.
 - Seven binary dictionary files are compressed and embedded in `main.js` under logical keys beginning with `lindera/ipadic/`, with each included file's bytes unchanged. `dict.words` and `dict.wordsidx` are omitted because surface-only tokenization does not use their morphological details; empty byte arrays are passed for these two inputs at runtime. All vocabulary and segmentation data are retained.
 - The complete upstream notice, including NAIST and ICOT's redistribution and warranty terms for `mecab-ipadic-2.7.0-20070801`, accompanies the dictionary as `lindera/ipadic/NOTICE.txt`. Those terms apply to the dictionary separately from the Lindera MIT license.
 - Build-time downloads are verified against pinned hashes in `scripts/lindera-assets.mjs`. The distributed plugin decompresses its embedded assets in memory and does not download dictionaries or extract files at runtime.

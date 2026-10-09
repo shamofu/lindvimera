@@ -321,8 +321,18 @@ export class ProbeView extends ItemView {
   ): Promise<void> {
     const segmenter = this.plugin.wordSegmenter(mode);
     requireCheck(
-      segmenter.id === `lindera-ipadic-6.0.0-${mode}`,
+      segmenter.id === `lindera-ipadic-6.2.0-${mode}`,
       `The ${mode} test is using ${segmenter.id} instead of the bundled Lindera runtime.`,
+    );
+    // Exercise the end-of-input compound path fixed upstream in Lindera 6.1.0.
+    const finalCompound = "東京大学";
+    const finalWords = segmenter
+      .segment(finalCompound)
+      .map(({ from, to }) => finalCompound.slice(from, to));
+    requireCheck(
+      finalWords.join("/") === (mode === "normal" ? "東京大学" : "東京/大学") &&
+        this.plugin.wordSegmenter(mode) === segmenter,
+      `${mode} did not retain the expected end-of-input compound segmentation: ${finalWords.join("/")}.`,
     );
     const spans = wordSpans(
       modeFixture,
@@ -577,7 +587,7 @@ export class ProbeView extends ItemView {
         await this.plugin.wordsReady;
         requireCheck(offline.active, "Renderer network guard is inactive.");
         requireCheck(
-          this.plugin.wordSegmenter().id.startsWith("lindera-ipadic-6.0.0-"),
+          this.plugin.wordSegmenter().id.startsWith("lindera-ipadic-6.2.0-"),
           "Offline startup fell back to BudouX.",
         );
         requireCheck(

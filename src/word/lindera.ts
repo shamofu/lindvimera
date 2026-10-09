@@ -57,7 +57,7 @@ export async function createLinderaSegmenters(assets: LinderaAssets): Promise<Li
       const tokenizer = builder.build();
       tokenizers.push(tokenizer);
       return {
-        id: `lindera-ipadic-6.0.0-${mode}`,
+        id: `lindera-ipadic-6.2.0-${mode}`,
         segment(text) {
           if (disposed) throw new Error("Lindera segmenters have been disposed.");
           if (text.length === 0) return [];

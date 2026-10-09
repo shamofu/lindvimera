@@ -33,7 +33,7 @@
   "dependencies": {
     "@lezer/markdown": "1.7.2",
     "budoux": "0.9.2",
-    "lindera-wasm": "6.0.0"
+    "lindera-wasm": "6.2.0"
   },
   "devDependencies": {
     "@codemirror/commands": "6.8.1",
