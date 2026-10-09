@@ -4,7 +4,7 @@
 
 ## ビルドと配布
 
-Git、Node.js 24系、pnpm **12.4.2**を使用します。ルートでサブモジュールを初期化し、ロックファイルどおりに依存を取得します。
+Git、Node.js 24系（24.15.0以上）、pnpm **12.10.1**を使用します。ルートでサブモジュールを初期化し、ロックファイルどおりに依存を取得します。
 
 ```powershell
 git submodule update --init --recursive
@@ -33,7 +33,7 @@ pnpm check
 
 LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストールした`lindera-wasm`パッケージを使用します。`scripts/lindera-assets.mjs`は別配布のIPADIC辞書ZIPだけを取得し、SHA-256を検証して展開します。完全辞書9ファイルは比較検証用にcacheへ保持し、配布物には`dict.words`・`dict.wordsidx`を除く7ファイルを同梱します。同梱する各ファイルのバイト列と語彙は変更しません。初回取得にはネットワークが必要で、以後はcache内のZIPも毎回検証して利用します。`dist/`、`.generated/`、`.cache/`、`.test-runtime/`、`.release/`、`.release-gate/`は生成物としてGit管理から除外します。
 
-`obsidian`、`electron`、`@codemirror/*`、`node:*`はObsidian desktopが提供するため外部依存にします。構造解析用の`@lezer/markdown` 1.7.2と、その依存である`@lezer/common` 1.5.2・`@lezer/highlight` 1.2.3は本体に同梱します。このparserの構文木は内部でのみ使用し、ホストへ渡すのは原文の数値offsetだけです。ホスト提供のCodeMirrorと共有する構文木・StateFieldへ混ぜません。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
+`obsidian`、`electron`、`@codemirror/*`、`node:*`はObsidian desktopが提供するため外部依存にします。構造解析用の`@lezer/markdown` 1.8.0と、その依存である`@lezer/common` 1.5.3・`@lezer/highlight` 1.2.5は本体に同梱します。このparserの構文木は内部でのみ使用し、ホストへ渡すのは原文の数値offsetだけです。ホスト提供のCodeMirrorと共有する構文木・StateFieldへ混ぜません。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
 
 Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)です。GitHub側のアーカイブは2026年4月15日の[移転](https://discuss.codemirror.net/t/codemirrors-migration-to-forgejo/9706/8)によるものです。採用版はnpmパッケージとlockfileで固定し、更新時は公式配布情報・移転先の変更履歴・必要APIを照合します。現在の最新版であることを前提にはしません。
 
@@ -126,7 +126,7 @@ npmの検査だけでは、GitサブモジュールのVim、独自patch、WASM�
 
 ## 検証
 
-`pnpm check`で本体・テスト・配布物を検査します。`typecheck`は上流ソースを準備した後、3回の`tsc`コマンドで上流JavaScriptの型宣言、`tsconfig.vendor.json`によるwrapperの型宣言、本体・テストの型検査を順に実行します。上流の型宣言生成は`--noCheck`、本体とテストはstrict設定を使います。整形・静的解析の対象外は各設定ファイルに定義し、上流ソース、patch本文、内容保持が必要なfixtureを一括整形しません。
+`pnpm check`で本体・テスト・配布物を検査します。`typecheck`は上流ソースを準備した後、TypeScript 6.0.3の3回の`tsc`コマンドで`tsconfig.vendor-core.json`による上流JavaScriptの型宣言、`tsconfig.vendor.json`によるwrapperの型宣言、本体・テストの型検査を順に実行します。ルート側の2つの設定で`moduleResolution`を`Bundler`、`rootDir`をそれぞれcoreディレクトリとwrapperの`src`へ明示し、上流の設定ファイルや宣言生成先は変更しません。上流の型宣言生成は`noCheck`、本体とテストはstrict設定を使います。整形・静的解析の対象外は各設定ファイルに定義し、上流ソース、patch本文、内容保持が必要なfixtureを一括整形しません。
 
 `eslint-plugin-obsidianmd`の推奨設定は本体ソースとmanifest・package情報を対象とし、テスト・生成物・上流ソースを除外します。型情報を使うため、`pnpm lint:obsidian`は`pnpm typecheck`の後に実行します。Oxlintと併用し、警告も失敗として扱います。設定画面は`getSettingDefinitions()`で検索に対応し、日本語の表示、キー割り当てフォームの検証とエラー、下書き・適用・取消、操作ガイドを実機でも確認します。
 
@@ -134,7 +134,7 @@ Vitestは`test/**/*.test.ts`の機能テストを実行します。`test/word/na
 
 `test/input/operation-coverage.test.ts`は対応する操作をデータ駆動で実行し、本文とネイティブセルのDOMキー入力から、文書・カーソル・選択・モード・レジスタ・履歴を確認します。画面座標に依存する操作と実際のObsidian UI競合は実機suiteで確認します。engineのdispatcherを直接呼ぶ既存の詳細テストも維持しますが、それだけではホストとの入力競合の合格条件にはしません。
 
-実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。`probe`と`test:e2e`は検証用の`lindvimera-test-harness`を別ビルドして導入します。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.13.7 archiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。
+実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。`probe`と`test:e2e`は検証用の`lindvimera-test-harness`を別ビルドして導入します。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.14.4 archiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。
 
 検証画面、入力診断、診断ファイルの書き込みと検証用CSSはharnessだけに含めます。本番には検証機能を登録せず、古い保存設定にある`probeEnabled`も無視します。harnessは本番インスタンスの読み取り専用`runtime`（契約バージョン`1`）からVim・セッション・単語・テーブル処理の同じ実装参照を使い、エンジンを再生成しません。契約が一致しなければ検証を失敗させます。この接続口は内部検証用で、安定した外部拡張APIではありません。esbuildの入力一覧で本番への検証コード混入と、harnessへの本体・Vimエンジンの再取り込みを検査します。
 
@@ -148,7 +148,7 @@ Source・Live Preview・セルの入力競合、取消、ホストへの委譲�
 
 mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`quality`は共通actionで静的解析、整形確認、型検査、公式Lint、依存関係検査と検証スクリプトのテストを実行します。`e2e`はbuildのcandidate artifactをそのまま使用し、`release-ready`は全ジョブの成功後に配布内容の検証と梱包を確認します。失敗・キャンセル・スキップでは成功にしません。main CIではリリース用artifactの保存やAttestation生成を行いません。
 
-タグのReleaseはWindows 2025の単一ジョブ、タイムアウト90分で実行します。タグのcommitと固定サブモジュールを取得し、Node.js 24、pnpm 12.4.2、lockfileで依存を導入します。main CIと共通のquality全検査、単体テスト、ビルド、E2E、配布検証・梱包、変更履歴生成、Attestation生成・検証、公開を順番に実行します。E2E後に本番ビルドを作り直しません。過去のCI成功履歴や保存済みartifactを取得せず、そのRelease実行で検証した成果物を公開します。
+タグのReleaseはWindows 2025の単一ジョブ、タイムアウト90分で実行します。タグのcommitと固定サブモジュールを取得し、Node.js 24（24.15.0以上）、pnpm 12.10.1、lockfileで依存を導入します。main CIと共通のquality全検査、単体テスト、ビルド、E2E、配布検証・梱包、変更履歴生成、Attestation生成・検証、公開を順番に実行します。E2E後に本番ビルドを作り直しません。過去のCI成功履歴や保存済みartifactを取得せず、そのRelease実行で検証した成果物を公開します。
 
 公開処理は`scripts/release/publish.ps1`です。`quality`では`node --test test/release/*.test.mjs`と`pwsh -NoProfile -File test/release/publish.test.ps1`も実行し、配布検証・梱包、Git履歴からの変更点生成、本文だけの更新、下書きの再作成・公開条件を検査します。GitHubへの書き込みはモック化され、テストは実際のReleaseやタグを変更しません。
 
@@ -156,7 +156,7 @@ workflow全体はブランチ単位の共通concurrency groupで直列実行し�
 
 main CIではpnpm storeのcacheをbuildだけが保存し、他ジョブは復元だけを行います。キーはブランチ、OS・architecture、Node・pnpm版、lockfileとworkspace設定のhashで分けます。IPADICの検証済み辞書ZIPはbuild、Obsidianの固定installer・archiveはe2eだけが保存します。Releaseは既存setupのpnpm cache復元を任意の高速化に使い、IPADICとObsidianを固定版・hash検証付きで取得します。cacheがなくても実行でき、`node_modules`、生成ソース、dist、Vault・profile・レポートはcacheしません。
 
-自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.13.7を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
+自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.14.4を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
 
 Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。公開と証明生成の書き込み権限はReleaseジョブに付与します。`provenance.json`とローカル検証情報はschema 2で、repository・commit・version・今回のReleaseのrun ID／attemptとファイルhashを記録します。Actions artifact IDは使用しません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
 

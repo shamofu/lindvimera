@@ -101,7 +101,7 @@ async function stopApplication(child, browser) {
 
 export async function runCiProbe() {
   if (process.platform !== "win32" || process.arch !== "x64")
-    throw new Error("The existing E2E contract requires Windows x64 / Obsidian 1.13.7.");
+    throw new Error("The existing E2E contract requires Windows x64 / Obsidian 1.14.4.");
   await mkdir(results, { recursive: true });
   for (const name of [
     ...Object.values(reportFiles),
@@ -365,7 +365,7 @@ export async function runCiProbe() {
     assert.equal(report.schemaVersion, 3);
     assert.equal(report.behavior, "cell-editor-v1");
     assert.equal(report.scope, "non-ime");
-    assert.equal(report.environment?.obsidian, "1.13.7");
+    assert.equal(report.environment?.obsidian, "1.14.4");
     assert.equal(report.environment?.platform, "win32");
     assert.equal(report.environment?.plugin, manifest.version);
     const required = [

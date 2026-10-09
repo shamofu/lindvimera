@@ -14,7 +14,7 @@ export async function prepareProbe({
   executable = process.env.OBSIDIAN_EXECUTABLE ??
     join(process.env.LOCALAPPDATA ?? "", "Programs/Obsidian/Obsidian.exe"),
   archive = process.env.OBSIDIAN_ARCHIVE ??
-    join(process.env.APPDATA ?? "", "obsidian/obsidian-1.13.7.asar"),
+    join(process.env.APPDATA ?? "", "obsidian/obsidian-1.14.4.asar"),
 } = {}) {
   const profile = join(runtime, "profile");
   const vault = join(runtime, "Lindvimera Test Vault");
@@ -33,7 +33,7 @@ export async function prepareProbe({
   }
   const installedHashes = await verifyRuntimeFiles(candidateHashes, plugin);
   await buildProbe(harness);
-  await copyFile(archive, join(profile, "obsidian-1.13.7.asar"));
+  await copyFile(archive, join(profile, "obsidian-1.14.4.asar"));
   const config = {
     vaults: { "0000000000000017": { path: vault, ts: Date.now(), open: true } },
     updateDisabled: true,
@@ -60,7 +60,7 @@ export async function prepareProbe({
         id: "lindvimera-offline-probe",
         name: "Lindvimera offline probe",
         version: "0.0.0",
-        minAppVersion: "1.13.7",
+        minAppVersion: "1.14.4",
         description: "Isolated test-only renderer network simulation.",
         author: "Lindvimera tests",
         isDesktopOnly: true,

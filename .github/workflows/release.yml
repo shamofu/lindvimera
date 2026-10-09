@@ -65,7 +65,7 @@ jobs:
       - name: Preserve E2E diagnostics
         if: always() && steps.e2e.outcome != 'skipped'
         continue-on-error: true
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: release-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: .test-runtime/results/
@@ -85,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/release/notes.mjs --output .release-gate/notes.md
       - name: Attest the tested release assets
-        uses: actions/attest@v4
+        uses: actions/attest@v4.2.2
         with:
           subject-path: |
             .release/main.js

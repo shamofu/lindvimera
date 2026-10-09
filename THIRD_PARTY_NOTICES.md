@@ -45,7 +45,7 @@ Distributed under an MIT license: https://codemirror.net/5/LICENSE
 
 ## Lezer Markdown parser
 
-- Package: `@lezer/markdown` 1.7.2, bundled from the npm distribution pinned by `pnpm-lock.yaml`.
+- Package: `@lezer/markdown` 1.8.0, bundled from the npm distribution pinned by `pnpm-lock.yaml`.
 - Project: [lezer/markdown](https://code.haverbeke.berlin/lezer/markdown).
 - The previous GitHub repository was archived as part of the [April 15, 2026 migration to Forgejo](https://discuss.codemirror.net/t/codemirrors-migration-to-forgejo/9706/8).
 - Source of the following notice: the installed package's unmodified `LICENSE`.
@@ -77,7 +77,7 @@ THE SOFTWARE.
 
 ## Lezer common and highlight
 
-- Packages: `@lezer/common` 1.5.2 and `@lezer/highlight` 1.2.3, bundled as private dependencies of the Markdown parser.
+- Packages: `@lezer/common` 1.5.3 and `@lezer/highlight` 1.2.5, bundled as private dependencies of the Markdown parser.
 - Projects: [lezer/common](https://code.haverbeke.berlin/lezer/common) and [lezer/highlight](https://code.haverbeke.berlin/lezer/highlight).
 - Source of the following identical notice: each installed package's unmodified `LICENSE`.
 - These bundled parser dependencies do not replace the host's CodeMirror packages, which remain external.
@@ -420,7 +420,7 @@ file.
 ## BudouX
 
 - Project: [google/budoux](https://github.com/google/budoux)
-- Installed JavaScript package: `budoux` 0.9.2
+- Installed JavaScript package: `budoux` 0.9.3
 - License declaration: `Apache-2.0` in the installed package's `package.json`.
 - Attribution below: the installed `src/parser.ts` and `src/index.ts` headers.
 - License text: [upstream LICENSE](https://github.com/google/budoux/blob/main/LICENSE).

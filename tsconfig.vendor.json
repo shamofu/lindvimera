@@ -1,6 +1,8 @@
 {
   "extends": "./.generated/codemirror-vim/packages/codemirror-vim/tsconfig.json",
   "compilerOptions": {
+    "moduleResolution": "Bundler",
+    "rootDir": "./.generated/codemirror-vim/packages/codemirror-vim/src",
     "types": [],
     "typeRoots": [],
     "noCheck": true,

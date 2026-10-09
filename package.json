@@ -1,6 +1,6 @@
 {
   "name": "lindvimera",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Lindvimera: Japanese-aware Vim editing for Obsidian",
   "keywords": [
@@ -23,7 +23,7 @@
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "typecheck": "pnpm prepare:vendor && tsc -p .generated/codemirror-vim/packages/codemirror-vim-core/tsconfig.json --noCheck && tsc -p tsconfig.vendor.json && tsc -p tsconfig.json",
+    "typecheck": "pnpm prepare:vendor && tsc -p tsconfig.vendor-core.json && tsc -p tsconfig.vendor.json && tsc -p tsconfig.json",
     "test": "pnpm test:unit",
     "test:unit": "pnpm prepare:vendor && vitest run",
     "test:e2e": "node scripts/probe/ci.mjs",
@@ -31,39 +31,39 @@
     "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs && pnpm build"
   },
   "dependencies": {
-    "@lezer/markdown": "1.7.2",
-    "budoux": "0.9.2",
+    "@lezer/markdown": "1.8.0",
+    "budoux": "0.9.3",
     "lindera-wasm": "6.2.0"
   },
   "devDependencies": {
-    "@codemirror/commands": "6.8.1",
-    "@codemirror/language": "6.12.4",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/language": "6.13.1",
     "@codemirror/search": "6.7.2",
-    "@codemirror/state": "6.5.0",
-    "@codemirror/view": "6.38.6",
-    "@lezer/common": "1.5.2",
-    "@types/node": "^24.10.1",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/common": "1.5.3",
+    "@types/node": "^24.19.2",
     "esbuild": "0.28.2",
     "eslint": "9.39.5",
     "eslint-plugin-obsidianmd": "0.4.2",
-    "jsdom": "30.1.0",
-    "obsidian": "1.13.1",
-    "oxfmt": "0.68.0",
-    "oxlint": "1.83.0",
-    "playwright-core": "1.63.0",
-    "typescript": "5.9.3",
-    "typescript-eslint": "8.70.0",
-    "vitest": "5.0.1"
+    "jsdom": "30.1.2",
+    "obsidian": "1.14.4",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
+    "playwright-core": "1.64.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
   },
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "12.4.2",
+      "version": "12.10.1",
       "onFail": "download"
     }
   },
   "engines": {
-    "node": ">=24.0.0 <25"
+    "node": ">=24.15.0 <25"
   },
-  "packageManager": "pnpm@12.4.2"
+  "packageManager": "pnpm@12.10.1"
 }

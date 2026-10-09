@@ -1,12 +1,12 @@
 # Lindvimera
 
-ObsidianのSourceモードとLive Previewで、日本語の単語・文操作、MarkdownのVim編集、ネイティブテーブルのセル編集を提供するプラグインです。対象環境はWindows・Obsidian **1.13.7**です。
+ObsidianのSourceモードとLive Previewで、日本語の単語・文操作、MarkdownのVim編集、ネイティブテーブルのセル編集を提供するプラグインです。対象環境はWindows・Obsidian **1.14.4**です。
 
 本文の編集にはVimを使い、ノート・タブ・サイドバーの操作にはObsidianを使います。Normal／Visualでは対応するVim操作を優先し、InsertではObsidianの通常入力・補完・貼り付けを使います。日本語入力とIMEはObsidianへ渡し、Vimコマンドと脱出キー列は英数の直接入力で使用します。
 
 ## インストール
 
-Git、Node.js 24系、pnpm **12.4.2**を用意し、リポジトリのルートで実行します。初回ビルドの辞書取得にはネットワークが必要です。
+Git、Node.js 24系（24.15.0以上）、pnpm **12.10.1**を用意し、リポジトリのルートで実行します。初回ビルドの辞書取得にはネットワークが必要です。
 
 ```powershell
 git submodule update --init --recursive

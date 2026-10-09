@@ -13,13 +13,13 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v7.0.0
+    - uses: actions/setup-node@v7.1.0
       with:
         node-version: "24"
         package-manager-cache: false
     - uses: pnpm/action-setup@v6.1.0
       with:
-        version: 12.4.2
+        version: 12.10.1
         run_install: false
         cache: false
     - id: store
@@ -32,6 +32,6 @@ runs:
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ steps.store.outputs.path }}
-        key: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-node24-pnpm12.4.2-${{ github.ref }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml') }}
+        key: pnpm-v1-${{ runner.os }}-${{ runner.arch }}-node24-pnpm12.10.1-${{ github.ref }}-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml') }}
     - shell: pwsh
       run: pnpm install --frozen-lockfile

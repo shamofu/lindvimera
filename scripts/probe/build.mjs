@@ -31,7 +31,7 @@ export async function buildProbe(outdir = join(root, ".test-runtime", "harness")
         id: harnessId,
         name: "Lindvimera test harness",
         version: "0.0.0",
-        minAppVersion: "1.13.7",
+        minAppVersion: "1.14.4",
         description: "Regression workbench for the isolated disposable test Vault only.",
         author: "Lindvimera tests",
         isDesktopOnly: true,
