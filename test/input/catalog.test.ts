@@ -80,3 +80,38 @@ describe("guide mapping availability", () => {
     ).toBe(true);
   });
 });
+
+describe("Markdown line editing guidance", () => {
+  it("describes Markdown body motions and Normal insertions only when enabled", () => {
+    const markdown = getGuideEntries(loadSettings({ markdownEditing: true }));
+    const standard = getGuideEntries(loadSettings({ markdownEditing: false }));
+    for (const mode of ["normal", "visual", "operatorPending"] as const) {
+      expect(builtin(markdown, "^", mode).description).toContain("Markdown");
+      expect(builtin(standard, "^", mode).description).toContain("最初の非空白文字");
+      expect(builtin(standard, "^", mode).description).not.toContain("Markdown");
+    }
+    for (const keys of ["I", "o", "O"]) {
+      expect(builtin(markdown, keys).description).toContain("Markdown");
+      expect(builtin(standard, keys).description).not.toContain("Markdown");
+      expect(builtin(standard, keys).enabled).toBe(true);
+    }
+    for (const keys of ["I", "o", "O"]) {
+      expect(builtin(markdown, keys, "visual")).toEqual(builtin(standard, keys, "visual"));
+      expect(builtin(markdown, keys, "visual").description).not.toContain("Markdown");
+    }
+  });
+
+  it("keeps standard Vim mapping targets available when Markdown line editing is off", () => {
+    const entries = getGuideEntries(
+      loadSettings({
+        markdownEditing: false,
+        keyBindings: [{ mode: "normal", from: "o", to: "O" }],
+      }),
+    );
+    expect(builtin(entries, "o").reason).toContain("ユーザー割り当て");
+    expect(builtin(entries, "O").enabled).toBe(true);
+    expect(
+      entries.find((entry) => entry.keys === "o" && entry.category === "ユーザー割り当て")?.enabled,
+    ).toBe(true);
+  });
+});

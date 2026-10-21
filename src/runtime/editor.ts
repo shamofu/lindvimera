@@ -541,6 +541,7 @@ export class EditorSession {
     }
     configureMarkdown(this.cm, {
       motions: settings.markdownMotions,
+      editing: settings.markdownEditing,
       textObjects: settings.textObjects,
       surround: settings.surround,
       openLink: this.host.openLink ? (linktext) => this.host.openLink?.(linktext) : undefined,

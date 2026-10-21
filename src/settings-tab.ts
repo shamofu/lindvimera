@@ -14,6 +14,7 @@ const toggles = {
   enabled: "Lindvimeraを有効にする",
   japanese: "日本語の単語・文操作",
   markdownMotions: "見出し・リスト移動",
+  markdownEditing: "Markdownに合わせた行追加・行頭操作",
   textObjects: "Markdownテキストオブジェクト",
   surround: "Surround",
   tables: "Live Previewテーブル連携",

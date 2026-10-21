@@ -29,13 +29,7 @@ const groups: readonly [string, string, string, string, string][] = [
     "小文字は単語、大文字は空白区切りのWORDを移動します。",
     "2w",
   ],
-  [
-    "0 ^ $ <Home> <End>",
-    "移動",
-    "行頭・行末へ移動",
-    "0は行頭、^は最初の非空白文字、$は行末です。",
-    "d$",
-  ],
+  ["0 $ <Home> <End>", "移動", "行頭・行末へ移動", "0は行頭、$は行末です。", "d$"],
   ["+ - _ <CR>", "移動", "行の先頭へ移動", "指定行の最初の非空白文字へ移動します。", "2+"],
   [
     "gg G",
@@ -83,7 +77,7 @@ const groups: readonly [string, string, string, string, string][] = [
   ["J gJ", "編集", "行の結合", "Jは区切り空白を調整し、gJは空白を追加せず結合します。", "3J"],
   ["~ r<character>", "編集", "文字の変更", "~は大小反転、rは次の文字で置き換えます。", "ra"],
   [
-    "i I a A o O R C s S",
+    "i a A R C s S",
     "モード",
     "入力・置換を開始",
     "指定位置で挿入、行の追加、範囲の変更、またはReplaceを開始します。",
@@ -220,12 +214,69 @@ const groups: readonly [string, string, string, string, string][] = [
 export function commandDescription(
   keys: string,
   mode?: VimMode,
+  settings?: Pick<LindvimeraSettings, "markdownEditing">,
 ): {
   label: string;
   category: string;
   description: string;
   example: string;
 } {
+  if (keys === "^")
+    return settings?.markdownEditing
+      ? {
+          category: "移動",
+          label: "Markdownの本文先頭へ移動",
+          description:
+            "Markdown本文では引用・リスト・タスク・ATX見出しの接頭辞を飛ばします。本文が空なら移動しません。コード・frontmatter・表・ネイティブセルでは最初の非空白文字へ移動します。",
+          example: "d^",
+        }
+      : {
+          category: "移動",
+          label: "最初の非空白文字へ移動",
+          description:
+            "現在行の最初の非空白文字へ移動します。Visual選択やoperatorの範囲指定にも使えます。",
+          example: "d^",
+        };
+  if (keys === "I") {
+    if (mode === "visual")
+      return {
+        category: "モード",
+        label: "選択範囲の行頭から挿入",
+        description:
+          "VimのVisual挿入を開始します。矩形選択では選択した各行の矩形の左端へ挿入します。",
+        example: "<C-v>jI",
+      };
+    return settings?.markdownEditing
+      ? {
+          category: "モード",
+          label: "Markdownの本文先頭から挿入",
+          description:
+            "Markdown本文では引用・リスト・タスク・ATX見出しの接頭辞の後から挿入します。本文が空でも接頭辞の後へ進みます。コード・frontmatter・表・ネイティブセルでは最初の非空白文字から挿入します。",
+          example: "I",
+        }
+      : {
+          category: "モード",
+          label: "行の最初の非空白文字から挿入",
+          description: "現在行の最初の非空白文字の前で挿入を開始します。",
+          example: "I",
+        };
+  }
+  if (mode !== "visual" && (keys === "o" || keys === "O")) {
+    const direction = keys === "o" ? "下" : "上";
+    return settings?.markdownEditing
+      ? {
+          category: "モード",
+          label: `Markdownの行を${direction}に追加`,
+          description: `現在の物理行の直${direction}に行を追加し、Markdownのリスト接頭辞を継続します。記号のない継続行は字下げと引用だけを引き継ぎ、タスクは未完了へ戻します。番号付きリストは${keys === "o" ? "現在の次の番号" : "現在と同じ番号"}で追加し、後続の同じ親の項目も連番にします。見出しの#は複製しません。コード・frontmatter・表・ネイティブセルでは標準の行追加です。`,
+          example: keys,
+        }
+      : {
+          category: "モード",
+          label: `${direction}に行を追加`,
+          description: `現在行の${direction}に行を追加し、Vimの標準規則で挿入を開始します。`,
+          example: keys,
+        };
+  }
   if (mode === "visual" && (keys === "o" || keys === "O"))
     return {
       category: "選択",
@@ -294,7 +345,7 @@ export function getGuideEntries(settings: LindvimeraSettings): CommandGuideEntry
             ? "ユーザー割り当てが優先されます。"
             : undefined;
       return {
-        ...commandDescription(entry.keys, mode),
+        ...commandDescription(entry.keys, mode, settings),
         keys: entry.keys,
         modes: [mode],
         enabled: !reason,

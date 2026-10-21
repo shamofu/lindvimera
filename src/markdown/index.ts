@@ -9,6 +9,11 @@ import { indexMarkdown, markdownObject, structureMotion, type MarkdownIndex } fr
 import { findSurround, surroundText, type SurroundRange } from "./surround";
 import { internalLinkAt } from "./links";
 import { markdownBlockObject } from "./blocks";
+import {
+  configureMarkdownEditing,
+  clearMarkdownEditing,
+  installMarkdownEditingMotion,
+} from "./editing-runtime";
 
 export { indexMarkdown, markdownObject, structureMotion } from "./ranges";
 export { surroundPair, surroundText, findSurround, changeSurround } from "./surround";
@@ -16,6 +21,7 @@ export { internalLinkAt } from "./links";
 export { indexMarkdownBlocks, markdownBlockObject } from "./blocks";
 
 export interface MarkdownSettings {
+  editing?: boolean;
   motions: boolean;
   textObjects: boolean;
   surround: boolean;
@@ -50,10 +56,12 @@ function lastCharacter(text: string, from: number, to: number): number {
 
 export function configureMarkdown(cm: object, options: MarkdownSettings): void {
   settings.set(cm, options);
+  configureMarkdownEditing(cm, options.editing ?? false);
   if (!options.surround) pending.delete(cm);
 }
 
 export function clearMarkdown(cm: object): void {
+  clearMarkdownEditing(cm);
   settings.delete(cm);
   indexes.delete(cm);
   pending.delete(cm);
@@ -152,6 +160,7 @@ function queueSurround(
 export function installMarkdownCommands(): void {
   if (installed) return;
   installed = true;
+  installMarkdownEditingMotion();
   Vim.defineAction("lindvimeraOpenLink", (cm) => {
     const link = internalLinkAt(cm.getValue(), cm.indexFromPos(cm.getCursor()));
     if (link !== undefined) settings.get(cm)?.openLink?.(link);

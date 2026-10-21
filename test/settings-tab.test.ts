@@ -45,6 +45,7 @@ describe("searchable settings", () => {
       "japanese",
       "linderaMode",
       "markdownMotions",
+      "markdownEditing",
       "textObjects",
       "surround",
       "tables",
@@ -116,6 +117,7 @@ describe("settings persistence", () => {
     for (const key of [
       "enabled",
       "markdownMotions",
+      "markdownEditing",
       "textObjects",
       "surround",
       "tables",
@@ -130,7 +132,7 @@ describe("settings persistence", () => {
     expect(host.saveSettings.mock.calls).toEqual([
       [true],
       [true],
-      ...Array.from({ length: 11 }, () => [false]),
+      ...Array.from({ length: 12 }, () => [false]),
     ]);
   });
 
@@ -233,4 +235,21 @@ describe("settings persistence", () => {
     expect(element.querySelector(".lindvimera-setting-error")?.textContent).toBe("");
     expect(host.saveSettings).toHaveBeenCalledExactlyOnceWith(false);
   });
+});
+
+it("saves the Markdown line editing toggle independently from Markdown motions", async () => {
+  const { host, tab } = setup({ markdownMotions: false });
+  const definition = rows(tab).find((row) => row.control?.key === "markdownEditing");
+  expect(definition?.name).toBe("Markdownに合わせた行追加・行頭操作");
+  expect(definition?.control?.type).toBe("toggle");
+  expect(tab.getControlValue("markdownEditing")).toBe(true);
+  await tab.setControlValue("markdownEditing", false);
+  expect(loadSettings(JSON.parse(JSON.stringify(host.settings)))).toMatchObject({
+    markdownEditing: false,
+    markdownMotions: false,
+  });
+  expect(host.saveSettings).toHaveBeenCalledExactlyOnceWith(false);
+  await expect(tab.setControlValue("markdownEditing", "false")).rejects.toThrow();
+  expect(host.settings.markdownEditing).toBe(false);
+  expect(host.saveSettings).toHaveBeenCalledTimes(1);
 });

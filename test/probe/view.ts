@@ -823,7 +823,12 @@ export class ProbeView extends ItemView {
       return parent.state.doc.toString();
     };
     await nativeCheck("native-extended-editing", async () => {
-      for (const example of extendedEditingCases) {
+      for (const example of [
+        ...extendedEditingCases,
+        { keys: "$d^", text: "- [ ] abcd", result: "d" },
+        { keys: "o<Esc>", text: "- first", result: "- first\n" },
+        { keys: "O<Esc>", text: "- first", result: "\n- first" },
+      ]) {
         await resetFixture();
         (owner as { destroyTableCell(): void }).destroyTableCell();
         const cell = model().rows[1][0];

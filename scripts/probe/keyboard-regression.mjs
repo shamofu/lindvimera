@@ -12,6 +12,7 @@ export const keyboardChecks = [
   "host-keyboard-invalid-command",
   "host-keyboard-replace-status",
   "host-keyboard-screen-motions",
+  "host-keyboard-markdown-editing",
   "host-keyboard-composition-delegation",
   "physical-body-escape",
 ];
@@ -374,7 +375,20 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
         const low = (await snapshot()).cursor.line;
         assert.ok(high < middle && middle < low, `H/M/L order differs: ${high}/${middle}/${low}`);
         assert.equal((await snapshot()).text, text);
-        await setup(source, `${"wrapped words ".repeat(140)}\nnext line`);
+        const wrappedText = `${"wrapped words ".repeat(140)}\nnext line\nlast line`;
+        await setup(source, wrappedText);
+        await page.keyboard.press("j");
+        assert.deepEqual(
+          (await snapshot()).cursor,
+          { line: 1, ch: 0 },
+          "j did not move one logical line.",
+        );
+        await page.keyboard.press("k");
+        assert.deepEqual(
+          (await snapshot()).cursor,
+          { line: 0, ch: 0 },
+          "k did not move one logical line.",
+        );
         await page.keyboard.type("gj");
         const lowerVisualLine = (await snapshot()).cursor;
         assert.equal(lowerVisualLine.line, 0, "gj moved to another logical line.");
@@ -387,6 +401,76 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
         await page.keyboard.press("g");
         await page.keyboard.press("ArrowUp");
         assert.deepEqual((await snapshot()).cursor, { line: 0, ch: 0 }, "g<Up> differs from gk.");
+        for (const command of ["ggdj", "ggjdk"]) {
+          await page.keyboard.type(command);
+          assert.equal(
+            (await snapshot()).text,
+            "last line",
+            `${command} did not delete both complete logical lines.`,
+          );
+          assert.equal((await snapshot()).insert, false);
+          await page.keyboard.press("u");
+          assert.equal((await snapshot()).text, wrappedText, `${command} did not undo once.`);
+        }
+      }
+    });
+    await check("host-keyboard-markdown-editing", async () => {
+      const examples = [
+        { command: "o", text: "- [x] task", input: "next", result: "- [x] task\n- [ ] next" },
+        { command: "o", text: "> ## heading", input: "body", result: "> ## heading\n> body" },
+        {
+          command: "3o",
+          text: "1. first\n2. next",
+          input: "item",
+          result: "1. first\n2. item\n3. item\n4. item\n5. next",
+        },
+        {
+          command: "O",
+          text: "9. parent\n   - child\n10. next",
+          input: "before",
+          result: "9. before\n10. parent\n    - child\n11. next",
+        },
+        { command: "$c^", text: "- [ ] abcd", input: "X", result: "- [ ] Xd" },
+        { command: "I", text: "> ## heading", input: "new ", result: "> ## new heading" },
+        { command: "I", text: "- [ ] ", input: "new", result: "- [ ] new" },
+      ];
+      for (const source of [true, false]) {
+        const mode = source ? "Source" : "Live Preview";
+        for (const example of examples) {
+          await setup(source, example.text);
+          await page.keyboard.type(example.command);
+          assert.equal(
+            (await snapshot()).insert,
+            true,
+            `${mode} ${example.command} did not enter Insert.`,
+          );
+          await page.keyboard.type(example.input);
+          await page.keyboard.press("Escape");
+          const state = await snapshot();
+          assert.equal(
+            state.text,
+            example.result,
+            `${mode} ${example.command} produced the wrong Markdown.`,
+          );
+          assert.equal(state.insert, false, `${mode} ${example.command} did not return to Normal.`);
+          await page.keyboard.press("u");
+          assert.equal(
+            (await snapshot()).text,
+            example.text,
+            `${mode} ${example.command} did not undo as one edit.`,
+          );
+        }
+        const text = "> - [ ] abcd";
+        await setup(source, text);
+        await page.keyboard.type("$^");
+        const state = await snapshot();
+        assert.deepEqual(
+          state.cursor,
+          { line: 0, ch: 8 },
+          `${mode} ^ did not skip the quote and task prefix.`,
+        );
+        assert.equal(state.text, text);
+        assert.equal(state.insert, false);
       }
     });
     await check("host-keyboard-composition-delegation", async () => {

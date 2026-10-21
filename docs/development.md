@@ -48,7 +48,7 @@ Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)�
 | `src/input`                      | 対応操作、UI・モード別の入力優先順位、挿入脱出キーと候補表示      |
 | `src/ui`                         | キー割り当てフォーム、検索可能な操作ガイド                        |
 | `src/word`                       | 辞書サービス、単語・文・書記素境界、テキストオブジェクト、行cache |
-| `src/markdown`                   | Markdown構造、テキストオブジェクト、Surround                      |
+| `src/markdown`                   | Markdown構造、行編集計画、テキストオブジェクト、Surround          |
 | `src/folding`                    | ホストの折り畳み範囲・状態とVim操作の接続                         |
 | `src/table`                      | セルと親文書の座標対応、セル移動、ネイティブadapter               |
 | `test/probe`                     | 配布対象外の検証プラグイン、検証画面と入力診断・記録              |
@@ -62,13 +62,21 @@ Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)�
 
 `src/input/commands.ts`に対応キー・モード遷移・operator・機能設定の情報をまとめ、`policy.ts`によるengineの候補選択・割り当て検証と、`catalog.ts`によるガイド表示の基準にします。部分一致・完全一致の両方を制限し、非対応操作を間接再生からも実行しません。文字引数、Insert文字列、検索語、Ex入力はコマンドと区別します。不成立のキー列は待機を解除して終了し、接頭辞や後続文字をホストへ再送しません。非対応の割り当ては保存内容を保持して適用だけを停止します。
 
-割り当てフォームは保存済みの`keyBindings`を複製したdraftを編集し、「適用」で検証・保存、「取り消す」で再読込します。保存形式は従来の`{ mode, from, to }[]`を維持し、JSON入力欄は表示しません。空欄・不正形式・重複・循環は適用を止め、未対応操作は理由とともに保存内容を保持します。`folding`と`showPendingHints`は既定で`true`とし、古い設定に値がなければ既定値を補います。
+割り当てフォームは保存済みの`keyBindings`を複製したdraftを編集し、「適用」で検証・保存、「取り消す」で再読込します。保存形式は従来の`{ mode, from, to }[]`を維持し、JSON入力欄は表示しません。空欄・不正形式・重複・循環は適用を止め、未対応操作は理由とともに保存内容を保持します。`markdownEditing`、`folding`、`showPendingHints`は既定で`true`とし、古い設定に値がなければ既定値を補います。`markdownEditing`は不正値も`true`へ回復し、明示した`false`は保持します。設定名は「Markdownに合わせた行追加・行頭操作」です。`markdownMotions`とは独立して切り替えます。
 
-ガイドと入力待ちの候補は表示専用です。候補はengineの`getPendingCommands`から、現在のモード・ユーザー割り当て・CommandPolicyで有効なものを取得します。未完入力が500ms続いたときに表示し、Insert／Replace、IME、専用入力UI、マクロ記録・再生中は抑制します。DOM表示からキーの実行、選択・フォーカス・履歴の変更を行いません。
+ガイドと入力待ちの候補は表示専用です。`catalog.ts`の説明へ現在の`markdownEditing`を渡し、`^`とNormalの`I/o/O`を設定に応じて説明します。設定がオフでも対応キーや割り当て先は無効にせず標準Vimとして扱い、Visualの`I/o/O`の説明は維持します。候補はengineの`getPendingCommands`から、現在のモード・ユーザー割り当て・CommandPolicyで有効なものを取得します。未完入力が500ms続いたときに表示し、Insert／Replace、IME、専用入力UI、マクロ記録・再生中は抑制します。DOM表示からキーの実行、選択・フォーカス・履歴の変更を行いません。
 
 脱出候補は表示だけを先行し、成立時に本文や挿入記録へ混入させません。保留中のEscでは候補を本文へ一度確定してから脱出します。Insert中の実際のカーソル移動と内部更新を区別してUndoを区切ります。モード表示ではReplace、Visual各種、未完入力、マクロ記録を区別します。
 
 ## Markdown構造と折り畳み
+
+`src/markdown/editing.ts`の`buildMarkdownEditingIndex`で文脈を解析し、`markdownContentStart`と`markdownOpenLine`で本文先頭・行追加の変更計画を求めます。既存のTaskList拡張とTable拡張を有効にしたLezer構文木を使い、UTF-16の原文offsetで扱います。変更計画は元文書上の変更範囲と適用後のカーソル位置を返し、`undefined`を標準Vimへのフォールバックとします。索引は本文のdocument revision単位で再利用します。Normalの`o/O`は現在の物理行の直下／直上に追加し、引用・リスト・字下げを継続します。タスクは`[ ]`に戻し、番号付きリストの後続の同じ親の項目を連番にします。`O`では現在項目も振り直し、番号の桁数が変わる継続行の字下げも補正します。接頭辞のない継続行は字下げと引用だけ、引用内見出しは引用だけを引き継ぎます。空項目は記号を残して継続します。
+
+`src/markdown/editing-runtime.ts`は既存のVim action委譲口を使い、`o/O`の行追加とNormalの`I`だけを処理します。`o/O`の一回の委譲では一行だけを追加し、上流の挿入反復へカウントを任せます。挿入は委譲APIの`enterInsert`で開始し、元のactionの編集記録、`.`、マクロ、Undoグループを維持します。追加した接頭辞を挿入記録へ二重登録しません。番号の変更と後続の入力を同じUndoへまとめます。
+
+`^`は専用の条件付きmotionで本文先頭を返し、Normal・Visual・operatorで共有します。Normalの`I`も同じ本文先頭を使います。引用・リスト・タスク・ATX見出しの接頭辞を除き、空の本文では`^`は元の位置、`I`は接頭辞の直後になります。標準の最初の非空白文字を求めるmotion全体は差し替えず、他のインデント・貼り付け操作へ波及させません。
+
+各実行時に`markdownEditing`と本文の編集対象・文脈を確認し、コード・frontmatter・表・ネイティブセルや設定無効時は標準Vimへ委譲します。Visualの`I/o/O`、`J`、段落・インデント操作、InsertのEnterには適用しません。`j/k`は原文の物理行、`gj/gk`は表示行を使います。ユーザー割り当ては通常どおり先に解決し、CommandPolicyは条件付きmotionを許可して標準操作へのフォールバックを残します。
 
 `src/markdown/blocks.ts`は`@lezer/markdown`の`parser.configure(TaskList)`で原文を解析します。frontmatterだけを同じUTF-16長・改行位置の空白へ置き換えてから解析し、文書直下のATX／Setext見出しと、引用外のListItemから範囲・親子関係を作ります。リストの継続行・子項目・コード・水平線の判定をインデントの正規表現だけで代用しません。既存のインラインオブジェクトと構造移動の索引は維持し、同じ文書revisionの索引を再利用します。
 

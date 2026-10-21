@@ -262,3 +262,27 @@ describe("dispatcher and guide regression cases", () => {
     }
   });
 });
+
+it("describes the pending body-start motion using the current Markdown setting", () => {
+  const { cm, settings } = setup();
+  keys(cm, "d");
+  expect(pendingHintEntries(cm, settings).find((entry) => entry.key === "^")?.label).toContain(
+    "Markdown",
+  );
+  settings.markdownEditing = false;
+  expect(pendingHintEntries(cm, settings).find((entry) => entry.key === "^")?.label).toContain(
+    "非空白",
+  );
+});
+
+it("uses standard motion guidance inside a native cell with Markdown editing enabled", () => {
+  const host = new NativeHostFixture("| A | B |\n| --- | --- |\n| one | two |");
+  try {
+    host.keys("d");
+    expect(
+      pendingHintEntries(host.engine, host.settings).find((entry) => entry.key === "^")?.label,
+    ).toContain("非空白");
+  } finally {
+    host.destroy();
+  }
+});

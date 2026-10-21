@@ -13,6 +13,7 @@ export interface LindvimeraSettings {
   japanese: boolean;
   linderaMode: LinderaMode;
   markdownMotions: boolean;
+  markdownEditing: boolean;
   textObjects: boolean;
   surround: boolean;
   folding: boolean;
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: LindvimeraSettings = {
   japanese: true,
   linderaMode: "normal",
   markdownMotions: true,
+  markdownEditing: true,
   textObjects: true,
   surround: true,
   folding: true,
@@ -90,6 +92,7 @@ export function loadSettings(value: unknown): LindvimeraSettings {
     "enabled",
     "japanese",
     "markdownMotions",
+    "markdownEditing",
     "textObjects",
     "surround",
     "folding",

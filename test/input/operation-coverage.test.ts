@@ -842,3 +842,139 @@ describe.each(["body", "cell"] as const)("supported DOM operations in %s", (targ
     editor.unchangedNeighbours();
   });
 });
+
+describe("Markdown editing through EditorSession command policy", () => {
+  it.each([
+    ["oX<Esc>", "- [x] first", "- [x] first\n- [ ] X"],
+    ["3oX<Esc>", "1. first\n2. next", "1. first\n2. X\n3. X\n4. X\n5. next"],
+    ["3OX<Esc>", "1. first\n2. next", "1. X\n2. X\n3. X\n4. first\n5. next"],
+    ["3IX<Esc>", "> ## first", "> ## XXXfirst"],
+    ["Oadded<Esc>", "9. first\n   - child\n10. next", "9. added\n10. first\n    - child\n11. next"],
+    ["$c^X<Esc>", "- [ ] abcd", "- [ ] Xd"],
+  ])("groups %s, numbering and inserted text into one Undo", (keys, text, result) => {
+    const e = create("body", text);
+    e.keys(keys);
+    expect(e.cm.getValue()).toBe(result);
+    expect(e.cm.state.vim?.insertMode).toBe(false);
+    expect(undoDepth(e.parent.state)).toBe(1);
+    e.keys("u");
+    expect(e.cm.getValue()).toBe(text);
+    e.keys("<C-r>");
+    expect(e.cm.getValue()).toBe(result);
+  });
+
+  it.each(["body", "cell"] as const)(
+    "resolves ^/I against the live %s editing target",
+    (target) => {
+      const e = create(target, "- [ ] abcd", 9);
+      e.keys("^");
+      expect(e.cm.getCursor().ch).toBe(target === "body" ? 6 : 0);
+      e.keys("IX<Esc>");
+      expect(e.cm.getValue()).toBe(target === "body" ? "- [ ] Xabcd" : "X- [ ] abcd");
+      e.unchangedNeighbours();
+      e.keys("u");
+      expect(e.cm.getValue()).toBe("- [ ] abcd");
+    },
+  );
+
+  it.each([
+    ["oX<Esc>", "- first\nX"],
+    ["OX<Esc>", "X\n- first"],
+  ])("keeps %s in native table cells on standard Vim actions", (keys, result) => {
+    const e = create("cell", "- first");
+    e.keys(keys);
+    expect(e.cm.getValue()).toBe(result);
+    e.unchangedNeighbours();
+    e.keys("u");
+    expect(e.cm.getValue()).toBe("- first");
+  });
+
+  it("preserves Japanese, astral and combining-character boundaries in operator ranges", () => {
+    const e = create("body", "- [ ] 日😀e\u0301末", 11);
+    e.keys("y^");
+    expect(Vim.getRegisterController().getRegister().toString()).toBe("日😀e\u0301");
+    e.keys("d^");
+    expect(e.cm.getValue()).toBe("- [ ] 末");
+    e.keys("u");
+    expect(e.cm.getValue()).toBe("- [ ] 日😀e\u0301末");
+    e.cm.setCursor({ line: 0, ch: 11 });
+    e.keys("v^y");
+    expect(Vim.getRegisterController().getRegister().toString()).toBe("日😀e\u0301末");
+  });
+
+  it("retains whitespace-only native-cell motion endpoints", () => {
+    const e = create("cell", "a\n    \nz", 3);
+    e.keys("^");
+    expect(e.cm.getCursor()).toMatchObject({ line: 1, ch: 3 });
+    e.cm.setCursor({ line: 1, ch: 1 });
+    e.keys("d^");
+    expect(e.cm.getValue()).toBe("a\n \nz");
+    e.unchangedNeighbours();
+    e.keys("u");
+    expect(e.cm.getValue()).toBe("a\n    \nz");
+  });
+
+  it("retains user mappings ahead of the conditional ^ motion", () => {
+    const e = create("body", "- [ ] abcd");
+    e.settings.keyBindings = [{ mode: "normal", from: "^", to: "$" }];
+    Vim.map("^", "$", "normal");
+    try {
+      editorSession(e.parent)!.configure();
+      e.keys("^");
+      expect(e.cm.getCursor().ch).toBe(9);
+    } finally {
+      Vim.unmap("^", "normal");
+    }
+  });
+
+  it("re-evaluates a recorded c^ and o after the setting is disabled", () => {
+    const e = create("body", "- abcd\n- efgh", 5);
+    e.keys("c^X<Esc>");
+    expect(e.cm.getValue()).toBe("- Xd\n- efgh");
+    e.settings.markdownEditing = false;
+    editorSession(e.parent)!.configure();
+    e.cm.setCursor({ line: 1, ch: 5 });
+    e.keys(".");
+    expect(e.cm.getValue()).toBe("- Xd\nXh");
+    e.keys("oY<Esc>");
+    expect(e.cm.getValue()).toBe("- Xd\nXh\nY");
+  });
+
+  it("re-evaluates a standard c^ recording after Markdown editing becomes enabled", () => {
+    const e = create("body", "- abcd\n- efgh", 5);
+    e.settings.markdownEditing = false;
+    editorSession(e.parent)!.configure();
+    e.keys("c^X<Esc>");
+    expect(e.cm.getValue()).toBe("Xd\n- efgh");
+    e.settings.markdownEditing = true;
+    editorSession(e.parent)!.configure();
+    e.cm.setCursor({ line: 1, ch: 5 });
+    e.keys(".");
+    expect(e.cm.getValue()).toBe("Xd\n- Xh");
+  });
+
+  it("recalculates numbering during counted dot and macro replay", () => {
+    const e = create("body", "1. first\n2. next");
+    e.keys("qaoX<Esc>q");
+    expect(e.cm.getValue()).toBe("1. first\n2. X\n3. next");
+    e.keys("2.");
+    expect(e.cm.getValue()).toBe("1. first\n2. X\n3. X\n4. X\n5. next");
+    e.keys("@a");
+    expect(e.cm.getValue()).toBe("1. first\n2. X\n3. X\n4. X\n5. X\n6. next");
+  });
+
+  it("keeps Visual I/o/O unchanged on Markdown prefixes", () => {
+    const e = create("body", "- first\n- second");
+    e.keys("vllI!<Esc>");
+    expect(e.cm.getValue()).toBe("!- first\n- second");
+    e.keys("u");
+    e.cm.setCursor({ line: 0, ch: 2 });
+    e.keys("vll");
+    const selected = e.cm.getSelection();
+    e.keys("o");
+    expect(e.cm.getSelection()).toBe(selected);
+    e.keys("O");
+    expect(e.cm.getSelection()).toBe(selected);
+    expect(e.cm.getValue()).toBe("- first\n- second");
+  });
+});

@@ -16,7 +16,10 @@ interface CandidateAPI {
 const objectKeys = [..."wWspbB()[]{}<>\"'`"].flatMap((key) => ["i" + key, "a" + key]);
 
 /** The engine returns detached descriptors, never a command that this UI can execute. */
-export function pendingHintEntries(cm: CodeMirror): { key: string; label: string }[] {
+export function pendingHintEntries(
+  cm: CodeMirror,
+  settings?: Pick<LindvimeraSettings, "markdownEditing">,
+): { key: string; label: string }[] {
   const state = cm.state.vim;
   if (!state || state.insertMode || cm.state.dialog) return [];
   const input = state.inputState;
@@ -74,6 +77,7 @@ export function pendingHintEntries(cm: CodeMirror): { key: string; label: string
             : commandDescription(
                 candidate.keys,
                 state.visualMode ? "visual" : input.operator ? "operatorPending" : "normal",
+                cm.getEditingView() === cm.cm6 ? settings : undefined,
               ).label,
       })),
     ...registerHint,
@@ -146,7 +150,7 @@ export class PendingHints {
       this.timer = undefined;
       if (generation !== this.generation || target !== this.host.target() || !this.eligible())
         return;
-      const entries = pendingHintEntries(this.cm);
+      const entries = pendingHintEntries(this.cm, this.host.settings());
       if (!entries.length) return;
       const root = this.cm.cm6.dom;
       const overlay = child(root, "div", "lindvimera-pending-hints");

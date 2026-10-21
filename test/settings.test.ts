@@ -64,3 +64,11 @@ it("restores both Lindera modes, defaults invalid values to normal and retains m
     expect(loadSettings(saved)).toMatchObject({ japanese: false, linderaMode: mode });
   }
 });
+
+it("defaults Markdown line editing for older or invalid saved settings and retains explicit false", () => {
+  for (const markdownEditing of [undefined, null, "false", 0, {}, []])
+    expect(loadSettings({ markdownEditing }).markdownEditing).toBe(true);
+  expect(loadSettings({}).markdownEditing).toBe(true);
+  expect(loadSettings({ markdownEditing: true }).markdownEditing).toBe(true);
+  expect(loadSettings({ markdownEditing: false }).markdownEditing).toBe(false);
+});
