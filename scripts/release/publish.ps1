@@ -32,9 +32,9 @@ $info = Get-Content .release-gate/info.json -Raw | ConvertFrom-Json -AsHashtable
 Confirm-BuildIdentity $info 'Build metadata'
 
 function Confirm-Tag {
-  git fetch --force --no-tags origin '+refs/heads/release:refs/remotes/origin/release' "+refs/tags/${tag}:refs/tags/${tag}"
+  git fetch --force --no-tags origin '+refs/heads/main:refs/remotes/origin/main' "+refs/tags/${tag}:refs/tags/${tag}"
   if ((git rev-parse "refs/tags/${tag}^{commit}") -cne $commit) { throw 'The release tag moved.' }
-  git merge-base --is-ancestor $commit refs/remotes/origin/release
+  git merge-base --is-ancestor $commit refs/remotes/origin/main
 }
 
 Confirm-Tag

@@ -1,7 +1,7 @@
 {
   "id": "lindvimera",
   "name": "Lindvimera",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minAppVersion": "1.14.4",
   "description": "Japanese-aware Vim editing with Markdown commands and native table support.",
   "author": "shamofu",

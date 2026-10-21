@@ -62,18 +62,21 @@ function git {
   $mockArguments = @($args)
   switch ($mockArguments[0]) {
     'fetch' {
-      Assert-ReleaseTestArguments $mockArguments @('fetch', '--force', '--no-tags', 'origin', '+refs/heads/release:refs/remotes/origin/release', "+refs/tags/$($ReleaseTestState.Tag):refs/tags/$($ReleaseTestState.Tag)")
+      Assert-ReleaseTestArguments $mockArguments @('fetch', '--force', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main', "+refs/tags/$($ReleaseTestState.Tag):refs/tags/$($ReleaseTestState.Tag)")
       $ReleaseTestState.Calls.Add(@{ Kind = 'fetch'; Arguments = $mockArguments })
+      if ((Get-ReleaseTestCalls 'fetch').Count -eq $ReleaseTestState.TagDeletedAt) { throw 'The remote tag no longer exists.' }
     }
     'rev-parse' {
+      if (($mockArguments -join ' ') -ceq 'rev-parse refs/remotes/origin/main') { return $ReleaseTestState.MainTip }
       Assert-ReleaseTestArguments $mockArguments @('rev-parse', "refs/tags/$($ReleaseTestState.Tag)^{commit}")
       $ReleaseTestState.TagChecks++
       if ($ReleaseTestState.TagChecks -eq $ReleaseTestState.TagMovedAt) { return 'moved-commit' }
       return $ReleaseTestState.Commit
     }
     'merge-base' {
-      Assert-ReleaseTestArguments $mockArguments @('merge-base', '--is-ancestor', $ReleaseTestState.Commit, 'refs/remotes/origin/release')
-      if ($ReleaseTestState.WrongBranch) { throw 'The tag is outside the release branch.' }
+      Assert-ReleaseTestArguments $mockArguments @('merge-base', '--is-ancestor', $ReleaseTestState.Commit, 'refs/remotes/origin/main')
+      $ReleaseTestState.MainChecks++
+      if ($ReleaseTestState.MainChecks -eq $ReleaseTestState.OutsideMainAt) { throw 'The tag is outside main history.' }
     }
     default { throw "Unexpected git command: $($mockArguments -join ' ')" }
   }
@@ -161,7 +164,8 @@ function Initialize-ReleaseTestFixture {
   $script:ReleaseTestState = @{
     Repository = 'test-owner/test-repository'; Tag = '1.2.3'; Commit = ('a' * 40); ReleaseId = 24680; OldReleaseId = 13579
     Calls = [System.Collections.Generic.List[object]]::new(); Assets = [System.Collections.Generic.List[object]]::new()
-    Releases = @(); ExtraAssets = @(); TagChecks = 0; TagMovedAt = 0; WrongBranch = $false
+    Releases = @(); ExtraAssets = @(); TagChecks = 0; TagMovedAt = 0; TagDeletedAt = 0
+    MainTip = ('b' * 40); MainChecks = 0; OutsideMainAt = 0
     CorruptRemote = ''; DropUpload = $false; InvalidAttestation = ''
     Files = @('main.js', 'manifest.json', 'styles.css', 'lindvimera-1.2.3.zip', 'SHA256SUMS', 'provenance.json')
     Notes = "<!-- lindvimera-notes:start -->`n- Test release notes`n<!-- lindvimera-notes:end -->"
@@ -242,6 +246,12 @@ try {
     Assert-ReleaseTestArguments $order @('read-old', 'delete', 'create', 'read-new', 'publish')
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'upload').Count -eq 6) 'Retry must upload the whole fresh build.'
     Assert-ReleaseTest ((Get-ReleaseTestCalls 'attestation').Count -eq 6) 'Verify the new build before deleting a draft.'
+  }
+  Invoke-ReleaseTestCase 'publishes an ancestor after main has advanced beyond the tagged commit' -Verify {
+    Assert-ReleaseTest ($ReleaseTestState.MainTip -cne $ReleaseTestState.Commit) 'The fixture must distinguish main HEAD from the tagged commit.'
+    Assert-ReleaseTest ($ReleaseTestState.MainChecks -eq 3) 'Recheck main ancestry at all publication boundaries.'
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'publish').Count -eq 1) 'A tagged ancestor of main must remain publishable.'
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'create')[0].Request.target_commitish -ceq $ReleaseTestState.Commit) 'Publish the tagged commit, not the newer main HEAD.'
   }
   foreach ($publishedBody in @('', '<!-- lindvimera-release:{"schemaVersion":1} -->', 'current')) {
     Invoke-ReleaseTestCase "never changes a published release with body '$publishedBody'" -Arrange {
@@ -404,7 +414,18 @@ try {
       }
     } -Failure 'already published|managed draft|publication marker|does not match this build' -Verify { Assert-ReleaseTestNoPublish }
   }
-  Invoke-ReleaseTestCase 'rejects a tag outside release history' -Arrange { $ReleaseTestState.WrongBranch = $true } -Failure 'outside the release branch' -Verify { Assert-ReleaseTestNoWrites }
+  Invoke-ReleaseTestCase 'rejects a tag outside main history' -Arrange { $ReleaseTestState.OutsideMainAt = 1 } -Failure 'outside main history' -Verify { Assert-ReleaseTestNoWrites }
+  Invoke-ReleaseTestCase 'rechecks main ancestry before deleting a draft' -Arrange { Add-ReleaseTestDraft; $ReleaseTestState.OutsideMainAt = 2 } -Failure 'outside main history' -Verify { Assert-ReleaseTestNoWrites }
+  Invoke-ReleaseTestCase 'rechecks main ancestry after uploads' -Arrange { $ReleaseTestState.OutsideMainAt = 3 } -Failure 'outside main history' -Verify {
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'upload').Count -eq 6) 'Expected uploads before the final ancestry check.'
+    Assert-ReleaseTestNoPublish
+  }
+  Invoke-ReleaseTestCase 'rejects a deleted remote tag despite the local tag' -Arrange { $ReleaseTestState.TagDeletedAt = 1 } -Failure 'remote tag no longer exists' -Verify { Assert-ReleaseTestNoWrites }
+  Invoke-ReleaseTestCase 'rechecks remote tag existence before deleting a draft' -Arrange { Add-ReleaseTestDraft; $ReleaseTestState.TagDeletedAt = 2 } -Failure 'remote tag no longer exists' -Verify { Assert-ReleaseTestNoWrites }
+  Invoke-ReleaseTestCase 'rechecks remote tag existence after uploads' -Arrange { $ReleaseTestState.TagDeletedAt = 3 } -Failure 'remote tag no longer exists' -Verify {
+    Assert-ReleaseTest ((Get-ReleaseTestCalls 'upload').Count -eq 6) 'Expected uploads before the final remote tag check.'
+    Assert-ReleaseTestNoPublish
+  }
   Invoke-ReleaseTestCase 'rejects a tag moved at startup' -Arrange { $ReleaseTestState.TagMovedAt = 1 } -Failure 'release tag moved' -Verify { Assert-ReleaseTestNoWrites }
   Invoke-ReleaseTestCase 'rechecks the tag before deleting a draft' -Arrange { Add-ReleaseTestDraft; $ReleaseTestState.TagMovedAt = 2 } -Failure 'release tag moved' -Verify { Assert-ReleaseTestNoWrites }
   Invoke-ReleaseTestCase 'rechecks the tag after uploads' -Arrange { $ReleaseTestState.TagMovedAt = 3 } -Failure 'release tag moved' -Verify {

@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: lindvimera-refs/heads/release
+  group: lindvimera-release
   queue: max
   cancel-in-progress: false
 
@@ -41,11 +41,11 @@ jobs:
           if ($env:GITHUB_REF_TYPE -ne 'tag' -or $tag -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
             throw 'Use a numeric X.Y.Z tag without a v prefix or prerelease suffix.'
           }
-          git fetch --force --no-tags origin '+refs/heads/release:refs/remotes/origin/release' "+refs/tags/${tag}:refs/tags/${tag}"
+          git fetch --force --no-tags origin '+refs/heads/main:refs/remotes/origin/main' "+refs/tags/${tag}:refs/tags/${tag}"
           if ((git rev-parse "refs/tags/${tag}^{commit}") -cne $commit -or (git rev-parse HEAD) -cne $commit) {
             throw 'The tag or checkout differs from the source commit of this workflow.'
           }
-          git merge-base --is-ancestor $commit refs/remotes/origin/release
+          git merge-base --is-ancestor $commit refs/remotes/origin/main
           $manifest = Get-Content manifest.json -Raw | ConvertFrom-Json
           $package = Get-Content package.json -Raw | ConvertFrom-Json
           $versions = Get-Content versions.json -Raw | ConvertFrom-Json -AsHashtable
