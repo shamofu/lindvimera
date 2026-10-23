@@ -521,6 +521,10 @@ export class EditorSession {
 
   configure(): void {
     const settings = this.host.settings();
+    this.view.dom.classList.toggle("lindvimera-custom-cursor", settings.cursorColor !== null);
+    if (settings.cursorColor !== null)
+      this.view.dom.style.setProperty("--lindvimera-cursor-color", settings.cursorColor);
+    else this.view.dom.style.removeProperty("--lindvimera-cursor-color");
     const escapeSettings = this.escapeSettings();
     const fingerprint = JSON.stringify(escapeSettings);
     if (fingerprint !== this.escapeConfiguration) {
@@ -561,6 +565,8 @@ export class EditorSession {
 
   destroy(): void {
     this.disposed = true;
+    this.view.dom.classList.remove("lindvimera-custom-cursor");
+    this.view.dom.style.removeProperty("--lindvimera-cursor-color");
     this.hints.destroy();
     clearFolding(this.cm);
     this.restoreLifecycle();
@@ -597,6 +603,11 @@ export function lindvimeraEditor(host: EditorHost): Extension {
   const group = new VimHistoryGroup();
   return [
     vim(),
+    // Keep CodeMirror's focus/theme attribute refreshes from dropping the opt-in
+    // class. The property is managed individually to preserve host inline styles.
+    EditorView.editorAttributes.of(() =>
+      host.settings().cursorColor !== null ? { class: "lindvimera-custom-cursor" } : null,
+    ),
     EditorState.allowMultipleSelections.of(true),
     escapePreview,
     group.extension,

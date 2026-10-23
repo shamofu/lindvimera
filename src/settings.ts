@@ -20,6 +20,7 @@ export interface LindvimeraSettings {
   tables: boolean;
   showStatus: boolean;
   showPendingHints: boolean;
+  cursorColor: string | null;
   escapeSequences: string[];
   escapeTimeoutMs: number;
   keyBindings: KeyBinding[];
@@ -37,10 +38,18 @@ export const DEFAULT_SETTINGS: LindvimeraSettings = {
   tables: true,
   showStatus: true,
   showPendingHints: true,
+  cursorColor: null,
   escapeSequences: [],
   escapeTimeoutMs: 200,
   keyBindings: [],
 };
+
+export function checkedCursorColor(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value))
+    throw new Error("カーソルの色は #RRGGBB 形式で指定してください。");
+  return value.toLowerCase();
+}
 
 function readKeyBindings(value: unknown): KeyBinding[] {
   if (!Array.isArray(value)) throw new Error("キー割り当てはJSON配列で指定してください。");
@@ -102,6 +111,11 @@ export function loadSettings(value: unknown): LindvimeraSettings {
   ] as const;
   for (const key of flags) if (typeof data[key] === "boolean") result[key] = data[key];
   result.linderaMode = data.linderaMode === "decompose" ? "decompose" : "normal";
+  try {
+    result.cursorColor = checkedCursorColor(data.cursorColor);
+  } catch {
+    /* Older or malformed color settings retain the existing cursor appearance. */
+  }
   try {
     const escape = checkedEscapeSettings({
       sequences: data.escapeSequences ?? result.escapeSequences,

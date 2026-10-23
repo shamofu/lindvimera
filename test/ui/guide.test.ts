@@ -37,6 +37,50 @@ vi.mock("../../src/input/catalog", () => ({
 }));
 
 describe("searchable command guide", () => {
+  it("makes the operation results a named keyboard focus target", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      renderCommandGuide(container, () => loadSettings(undefined));
+      const results = container.querySelector<HTMLElement>(
+        '[role="region"][aria-label="操作一覧"]',
+      );
+      expect(results).not.toBeNull();
+      expect(results?.tabIndex).toBe(0);
+      results?.focus();
+      expect(document.activeElement).toBe(results);
+    } finally {
+      container.remove();
+    }
+  });
+
+  it.each([
+    { name: "search", selector: "input", value: "単語", event: "input" },
+    {
+      name: "mode",
+      selector: 'select[aria-label="ガイドのモード"]',
+      value: "visual",
+      event: "change",
+    },
+    {
+      name: "category",
+      selector: 'select[aria-label="ガイドの分類"]',
+      value: "表示",
+      event: "change",
+    },
+  ])("returns results to the top when the $name filter changes", ({ selector, value, event }) => {
+    const container = document.createElement("div");
+    renderCommandGuide(container, () => loadSettings(undefined));
+    const results = container.querySelector<HTMLElement>(".lindvimera-guide-results")!;
+    const filter = container.querySelector<HTMLInputElement | HTMLSelectElement>(selector)!;
+    // jsdom does not lay out content; this checks the refresh side effect only.
+    results.scrollTop = 120;
+    filter.value = value;
+    filter.dispatchEvent(new Event(event));
+    expect(results.querySelectorAll("article")).toHaveLength(1);
+    expect(results.scrollTop).toBe(0);
+  });
+
   it("filters by text, mode and category without changing settings", () => {
     const container = document.createElement("div");
     const settings = loadSettings(undefined);

@@ -59,7 +59,9 @@ describe("searchable settings", () => {
       expect(definition.name.trim()).not.toBe("");
       expect(definition.searchable).not.toBe(false);
     }
-    expect(definitions.find((definition) => definition.render)?.name).toBe("モード別キー割り当て");
+    expect(
+      definitions.find((definition) => definition.name === "モード別キー割り当て")?.render,
+    ).toBeTypeOf("function");
     expect(host.settings).toEqual(before);
     expect(host.saveSettings).not.toHaveBeenCalled();
   });
@@ -205,7 +207,7 @@ describe("settings persistence", () => {
     const unsupported = [{ mode: "normal", from: "Z", to: ":write<CR>" }];
     await tab.setControlValue("keyBindings", JSON.stringify(unsupported));
     expect(host.settings.keyBindings).toEqual(unsupported);
-    const definition = rows(tab).find((item) => item.render);
+    const definition = rows(tab).find((item) => item.name === "モード別キー割り当て");
     if (!definition?.render) throw new Error("Missing mapping editor.");
     const element = document.createElement("div");
     definition.render(
@@ -235,6 +237,149 @@ describe("settings persistence", () => {
     expect(element.querySelector(".lindvimera-setting-error")?.textContent).toBe("");
     expect(host.saveSettings).toHaveBeenCalledExactlyOnceWith(false);
   });
+});
+
+function renderCursor(tab: LindvimeraSettingTab) {
+  const definition = rows(tab).find((item) => item.name === "カーソルの色");
+  if (!definition?.render) throw new Error("Missing cursor color setting.");
+  expect(definition.searchable).not.toBe(false);
+  const settingEl = document.createElement("div");
+  const controlEl = document.createElement("div");
+  const description = document.createElement("div");
+  settingEl.append(description, controlEl);
+  description.textContent = typeof definition.desc === "string" ? definition.desc : "";
+  // Obsidian is not executable in jsdom. Keep native component event/value/disabled
+  // behavior at this boundary while running the real setting render and persistence.
+  const setting = {
+    settingEl,
+    controlEl,
+    setDesc(value: string) {
+      description.textContent = value;
+      return setting;
+    },
+    addColorPicker(callback: (component: unknown) => void) {
+      const input = document.createElement("input");
+      input.type = "color";
+      controlEl.append(input);
+      const component = {
+        colorPickerEl: input,
+        setValue(value: string) {
+          input.value = value;
+          return component;
+        },
+        setDisabled(value: boolean) {
+          input.disabled = value;
+          return component;
+        },
+        onChange(handler: (value: string) => void) {
+          input.addEventListener("input", () => handler(input.value));
+          return component;
+        },
+      };
+      callback(component);
+      return setting;
+    },
+    addButton(callback: (component: unknown) => void) {
+      const button = document.createElement("button");
+      controlEl.append(button);
+      const component = {
+        buttonEl: button,
+        setButtonText(value: string) {
+          button.textContent = value;
+          return component;
+        },
+        setDisabled(value: boolean) {
+          button.disabled = value;
+          return component;
+        },
+        onClick(handler: () => void) {
+          button.addEventListener("click", handler);
+          return component;
+        },
+      };
+      callback(component);
+      return setting;
+    },
+  };
+  definition.render(setting as unknown as Setting, {} as SettingGroup);
+  return {
+    settingEl,
+    description,
+    picker: controlEl.querySelector("input[type=color]") as HTMLInputElement,
+    reset: Array.from(controlEl.querySelectorAll("button")).find(
+      (button) => button.textContent === "既定に戻す",
+    )!,
+  };
+}
+
+describe("cursor color settings", () => {
+  it("persists normalized colors and a null reset with an editor refresh that does not flush input", async () => {
+    const { host, tab } = setup();
+    await tab.setControlValue("cursorColor", "#A1B2C3");
+    expect(tab.getControlValue("cursorColor")).toBe("#a1b2c3");
+    expect(loadSettings(JSON.parse(JSON.stringify(host.settings)))).toHaveProperty(
+      "cursorColor",
+      "#a1b2c3",
+    );
+    await tab.setControlValue("cursorColor", null);
+    expect(host.settings).toHaveProperty("cursorColor", null);
+    expect(host.saveSettings.mock.calls).toEqual([[true], [true]]);
+  });
+
+  it.each(["", "red", "#abc", "#11223344", " #112233", "#gg1122", 123, undefined])(
+    "rejects malformed new cursor color %s before mutation",
+    async (value) => {
+      const { host, tab } = setup();
+      const before = structuredClone(host.settings);
+      await expect(tab.setControlValue("cursorColor", value)).rejects.toThrow();
+      expect(host.settings).toEqual(before);
+      expect(host.saveSettings).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the native picker and reset state synchronized after changes and reset", async () => {
+    const { host, tab } = setup();
+    const ui = renderCursor(tab);
+    expect(ui.picker.value).toBe("#ff9696");
+    expect(ui.reset.disabled).toBe(true);
+    expect(ui.description.textContent).toContain("既存の色");
+    ui.picker.value = "#123abc";
+    ui.picker.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(host.settings).toHaveProperty("cursorColor", "#123abc"));
+    await vi.waitFor(() => expect(ui.reset.disabled).toBe(false));
+    expect(ui.picker.disabled).toBe(false);
+    ui.reset.click();
+    await vi.waitFor(() => expect(host.settings).toHaveProperty("cursorColor", null));
+    await vi.waitFor(() => expect(ui.picker.value).toBe("#ff9696"));
+    expect(ui.reset.disabled).toBe(true);
+    expect(ui.description.textContent).toContain("既存の色");
+    await tab.setControlValue("cursorColor", "#abcdef");
+    expect(ui.picker.value).toBe("#abcdef");
+    expect(ui.reset.disabled).toBe(false);
+  });
+
+  it.each(["picker", "reset"] as const)(
+    "restores settings and controls after a failed %s save",
+    async (action) => {
+      const { host, tab } = setup({ cursorColor: "#123abc" });
+      const ui = renderCursor(tab);
+      host.saveSettings.mockRejectedValueOnce(new Error("disk unavailable"));
+      if (action === "picker") {
+        ui.picker.value = "#abcdef";
+        ui.picker.dispatchEvent(new Event("input"));
+      } else ui.reset.click();
+      await vi.waitFor(() => expect(ui.settingEl.textContent).toContain("disk unavailable"));
+      expect(host.settings).toHaveProperty("cursorColor", "#123abc");
+      expect(ui.picker.value).toBe("#123abc");
+      expect(ui.picker.disabled).toBe(false);
+      expect(ui.reset.disabled).toBe(false);
+      host.saveSettings.mockResolvedValue(undefined);
+      ui.reset.click();
+      await vi.waitFor(() => expect(ui.reset.disabled).toBe(true));
+      expect(host.settings).toHaveProperty("cursorColor", null);
+      expect(ui.settingEl.textContent).not.toContain("disk unavailable");
+    },
+  );
 });
 
 it("saves the Markdown line editing toggle independently from Markdown motions", async () => {

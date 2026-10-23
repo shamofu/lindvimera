@@ -1,6 +1,15 @@
-import { PluginSettingTab, type App, type Plugin, type SettingDefinitionItem } from "obsidian";
+import {
+  PluginSettingTab,
+  type App,
+  type ButtonComponent,
+  type ColorComponent,
+  type Plugin,
+  type Setting,
+  type SettingDefinitionItem,
+} from "obsidian";
 import { checkedEscapeSettings } from "./input/escape";
-import type { LindvimeraSettings } from "./settings";
+import { checkedCursorColor, type LindvimeraSettings } from "./settings";
+import { child } from "./ui/dom";
 import { checkedMappingDraft, renderMappingEditor } from "./ui/mapping-editor";
 import { openCommandGuide } from "./ui/guide";
 
@@ -26,6 +35,7 @@ const toggles = {
 /** Uses the host's searchable controls while keeping the persisted settings schema. */
 export class LindvimeraSettingTab extends PluginSettingTab {
   private refreshMappings?: () => void;
+  private refreshCursor?: () => void;
 
   constructor(
     app: App,
@@ -44,6 +54,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
 
   private checkedValue(key: string, value: unknown): unknown {
     const settings = this.host.settings;
+    if (key === "cursorColor") return checkedCursorColor(value);
     if (Object.hasOwn(toggles, key)) {
       if (typeof value !== "boolean") throw new Error("オン・オフを指定してください。");
       return value;
@@ -83,6 +94,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
     const checked = this.checkedValue(key, value);
     const settings = this.host.settings;
     const previousBindings = settings.keyBindings;
+    const previousCursorColor = settings.cursorColor;
     if (Object.hasOwn(toggles, key)) settings[key as keyof typeof toggles] = checked as boolean;
     else if (key === "linderaMode")
       settings.linderaMode = checked as LindvimeraSettings["linderaMode"];
@@ -90,8 +102,12 @@ export class LindvimeraSettingTab extends PluginSettingTab {
     else if (key === "escapeTimeoutMs") settings.escapeTimeoutMs = checked as number;
     else if (key === "keyBindings")
       settings.keyBindings = checked as LindvimeraSettings["keyBindings"];
+    else if (key === "cursorColor") settings.cursorColor = checked as string | null;
     try {
-      await this.host.saveSettings(key === "japanese" || key === "linderaMode");
+      // Cursor appearance needs a live refresh without flushing pending input.
+      await this.host.saveSettings(
+        key === "japanese" || key === "linderaMode" || key === "cursorColor",
+      );
     } catch (error) {
       if (key === "keyBindings") {
         settings.keyBindings = previousBindings;
@@ -99,11 +115,59 @@ export class LindvimeraSettingTab extends PluginSettingTab {
         // the runtime and saved data, retaining the original failure for the form.
         await this.host.saveSettings(false).catch(() => {});
       }
+      if (key === "cursorColor") {
+        settings.cursorColor = previousCursorColor;
+        await this.host.saveSettings(true).catch(() => {});
+        this.refreshCursor?.();
+      }
       throw error;
     }
     // Preserve in-progress text in other controls when dependent state changes.
     this.refreshDomState();
     this.refreshMappings?.();
+    this.refreshCursor?.();
+  }
+
+  private renderCursorColor(setting: Setting): void {
+    let picker: ColorComponent;
+    let reset: ButtonComponent;
+    let busy = false;
+    const error = child(setting.controlEl, "div", "lindvimera-setting-error");
+    error.setAttribute("role", "status");
+    const refresh = () => {
+      const color = this.host.settings.cursorColor;
+      picker.setValue(color ?? "#ff9696").setDisabled(busy);
+      reset.setDisabled(busy || color === null);
+      setting.setDesc(
+        color === null
+          ? "既存の色を使用中です。色見本は既定のブロックカーソルの色です。"
+          : "Normal・Insert・Visual・Replaceと、Live Previewのテーブル内に共通の色を使用します。",
+      );
+    };
+    const save = async (color: string | null) => {
+      if (busy) return;
+      busy = true;
+      error.textContent = "";
+      refresh();
+      try {
+        await this.setControlValue("cursorColor", color);
+      } catch (reason) {
+        error.textContent = reason instanceof Error ? reason.message : String(reason);
+      } finally {
+        busy = false;
+        refresh();
+      }
+    };
+    setting.addColorPicker((component) => {
+      picker = component;
+      component.onChange((value) => void save(value));
+    });
+    setting.addButton((component) => {
+      reset = component;
+      component.setButtonText("既定に戻す").onClick(() => void save(null));
+    });
+    this.refreshCursor = refresh;
+    refresh();
   }
 
   override getSettingDefinitions(): SettingDefinitionItem[] {
@@ -132,6 +196,11 @@ export class LindvimeraSettingTab extends PluginSettingTab {
         });
     }
     definitions.push(
+      {
+        name: "カーソルの色",
+        desc: "Normal・Insert・Visual・Replaceと、Live Previewのテーブル内に共通の色を設定します。未設定時は既存の色を使用します。",
+        render: (setting) => this.renderCursorColor(setting),
+      },
       {
         name: "挿入モードの脱出キー",
         desc: 'JSON配列。例: ["jj", "jk"]。[]で無効。',

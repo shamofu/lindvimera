@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { EditorState, Transaction } from "@codemirror/state";
+import { EditorState, StateEffect, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import {
   defaultKeymap,
@@ -62,6 +62,64 @@ function keys(view: EditorView, text: string) {
 function preview(view: EditorView): string {
   return view.contentDOM.querySelector(".lindvimera-escape-preview")?.textContent ?? "";
 }
+
+it("refreshes cursor color without changing the editor session, pending input, or undo history", () => {
+  const { view, settings } = create("text");
+  const session = editorSession(view)!;
+  const cm = getCM(view)!;
+  expect(view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+  keys(view, "ij");
+  const state = view.state;
+  const depth = undoDepth(state);
+  settings.cursorColor = "#123abc";
+  session.configure();
+  expect(view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+  expect(editorSession(view)).toBe(session);
+  expect(getCM(view)).toBe(cm);
+  expect(view.state).toBe(state);
+  expect(preview(view)).toBe("j");
+  expect(cm.state.vim!.insertMode).toBe(true);
+  expect(undoDepth(view.state)).toBe(depth);
+  settings.cursorColor = "#fedcba";
+  session.configure();
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#fedcba");
+  view.dom.classList.add("theme-cursor");
+  view.dom.style.setProperty("--theme-cursor-color", "blue");
+  settings.cursorColor = null;
+  session.configure();
+  expect(view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+  expect(view.dom.classList.contains("theme-cursor")).toBe(true);
+  expect(view.dom.style.getPropertyValue("--theme-cursor-color")).toBe("blue");
+});
+
+it("removes only plugin cursor styling when the editor extension is removed", () => {
+  const { view, settings } = create("text");
+  const theme = EditorView.editorAttributes.of({ class: "theme-cursor" });
+  view.dispatch({ effects: StateEffect.appendConfig.of(theme) });
+  settings.cursorColor = "#123abc";
+  editorSession(view)!.configure();
+  view.dom.style.setProperty("--theme-cursor-color", "blue");
+  view.dispatch({ effects: StateEffect.reconfigure.of(theme) });
+  expect(view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+  expect(view.dom.classList.contains("theme-cursor")).toBe(true);
+  expect(view.dom.style.getPropertyValue("--theme-cursor-color")).toBe("blue");
+});
+
+it("retains custom cursor styling when CodeMirror updates host editor attributes", () => {
+  const { view, settings } = create("text");
+  settings.cursorColor = "#123abc";
+  editorSession(view)!.configure();
+  view.dispatch({
+    effects: StateEffect.appendConfig.of(EditorView.editorAttributes.of({ class: "theme-cursor" })),
+  });
+  expect(view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+  expect(view.dom.classList.contains("theme-cursor")).toBe(true);
+  expect(view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+});
 
 function segmenter(id: string, width: number): JapaneseSegmenter {
   return {

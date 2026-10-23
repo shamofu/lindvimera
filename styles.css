@@ -76,15 +76,55 @@
 
 .lindvimera-guide-modal {
   width: min(760px, 90vw);
+  max-height: calc(100dvh - 2rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.lindvimera-guide-modal .lindvimera-guide-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.lindvimera-guide-controls,
+.lindvimera-guide-content > [role="status"] {
+  flex-shrink: 0;
 }
 
 .lindvimera-guide-controls input {
   flex: 1 1 100%;
 }
 
-.lindvimera-guide-results {
-  max-height: 60vh;
-  overflow-y: auto;
+.lindvimera-guide-modal .lindvimera-guide-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 60dvh;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+}
+
+.lindvimera-guide-modal .lindvimera-guide-results::-webkit-scrollbar {
+  width: 12px;
+}
+
+.lindvimera-guide-modal .lindvimera-guide-results::-webkit-scrollbar-track {
+  background: var(--background-secondary);
+}
+
+.lindvimera-guide-modal .lindvimera-guide-results::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 3px solid var(--background-secondary);
+  border-radius: var(--radius-m);
+  background: var(--text-muted);
+}
+
+.lindvimera-guide-modal .lindvimera-guide-results:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
 }
 
 .lindvimera-guide-entry {
@@ -106,4 +146,32 @@
 .markdown-source-view.mod-cm6 .cm-table-widget.has-selection .cm-vimMode > .cm-vimCursorLayer,
 .markdown-source-view.mod-cm6 .cm-table-widget.has-selection .cm-vimMode > .cm-selectionLayer {
   display: block;
+}
+
+/* Scope color overrides to Lindvimera's parent editor and its nested native cells.
+   Each editor's own focus state determines whether its block is filled or outlined. */
+.cm-editor.lindvimera-custom-cursor {
+  /* Obsidian's contentContainer/sizer wrappers use this inherited caret token. */
+  --caret-color: var(--lindvimera-cursor-color);
+}
+
+.cm-editor.lindvimera-custom-cursor .cm-fat-cursor {
+  background-color: var(--lindvimera-cursor-color);
+}
+
+.cm-editor.lindvimera-custom-cursor:not(.cm-focused)
+  > .cm-scroller
+  > .cm-vimCursorLayer
+  .cm-fat-cursor,
+.lindvimera-custom-cursor
+  .cm-editor:not(.cm-focused)
+  > .cm-scroller
+  > .cm-vimCursorLayer
+  .cm-fat-cursor {
+  background-color: transparent;
+  outline-color: var(--lindvimera-cursor-color);
+}
+
+.cm-editor.lindvimera-custom-cursor .cm-cursorLayer:not(.cm-vimCursorLayer) .cm-cursor {
+  border-left-color: var(--lindvimera-cursor-color);
 }

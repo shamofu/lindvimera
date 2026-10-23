@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
+import { checkGuideScrolling } from "./guide-regression.mjs";
+import { checkCursorColors } from "./cursor-color-regression.mjs";
 
-/** Exercise the actual Obsidian 1.13 settings renderer in the disposable Vault. */
+/** Exercise the actual Obsidian settings renderer in the disposable Vault. */
 export async function runSettingsRegression(page) {
   const saved = await page.evaluate(() => structuredClone(app.plugins.plugins.lindvimera.settings));
   const checks = {};
   let settingsPage;
   async function check(name, run) {
-    await run();
+    const observations = await run();
     checks[name] = {
       passed: true,
       detail: "Passed in Obsidian settings.",
       observedAt: new Date().toISOString(),
+      ...(observations ? { observations } : {}),
     };
   }
   async function open() {
@@ -134,6 +137,35 @@ export async function runSettingsRegression(page) {
       await mappings.getByRole("button", { name: "適用", exact: true }).click();
       await persisted("keyBindings", valid);
     });
+    await check("settings-cursor-color", async () => {
+      const picker = row("カーソルの色").locator('input[type="color"]');
+      await picker.evaluate((input) => {
+        input.value = "#12abcd";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await persisted("cursorColor", "#12abcd");
+      await page.evaluate(async () => {
+        app.setting.close();
+        await app.plugins.unloadPlugin("lindvimera");
+        await app.plugins.loadPlugin("lindvimera");
+        await app.plugins.plugins.lindvimera.wordsReady;
+      });
+      assert.equal((await state()).cursorColor, "#12abcd");
+      await open();
+      assert.equal(
+        await row("カーソルの色").locator('input[type="color"]').inputValue(),
+        "#12abcd",
+      );
+      await row("カーソルの色").getByRole("button", { name: "既定に戻す", exact: true }).click();
+      await persisted("cursorColor", null);
+      assert.equal(
+        await row("カーソルの色")
+          .getByRole("button", { name: "既定に戻す", exact: true })
+          .isDisabled(),
+        true,
+      );
+    });
     await check("settings-command-guide", async () => {
       const before = await state();
       await row("操作ガイド").getByRole("button", { name: "操作ガイドを開く" }).click();
@@ -146,6 +178,7 @@ export async function runSettingsRegression(page) {
         }
       }
       assert.ok(guide, "The searchable command guide must open.");
+      const observations = await checkGuideScrolling(guide);
       const search = guide.getByRole("searchbox", { name: "操作ガイドを検索" });
       await search.fill("za");
       assert.ok(await guide.locator(".lindvimera-guide-entry").count());
@@ -154,6 +187,13 @@ export async function runSettingsRegression(page) {
       await search.press("Escape");
       await guide.waitFor({ state: "hidden" });
       assert.deepEqual(await state(), before);
+      return observations;
+    });
+    await check("cursor-color-rendering", async () => {
+      await page.evaluate(() => app.setting.close());
+      const observations = await checkCursorColors(page);
+      await open();
+      return observations;
     });
     await check("settings-japanese-switch", async () => {
       const dropdown = row("日本語の分割モード").locator('select:not([aria-hidden="true"])');

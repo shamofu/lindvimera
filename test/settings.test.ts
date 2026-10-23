@@ -72,3 +72,11 @@ it("defaults Markdown line editing for older or invalid saved settings and retai
   expect(loadSettings({ markdownEditing: true }).markdownEditing).toBe(true);
   expect(loadSettings({ markdownEditing: false }).markdownEditing).toBe(false);
 });
+
+it("restores a six-digit cursor color in lowercase and preserves the default for old or invalid data", () => {
+  expect(loadSettings({ cursorColor: "#A1B2C3" })).toHaveProperty("cursorColor", "#a1b2c3");
+  expect(loadSettings({ cursorColor: "#000000" })).toHaveProperty("cursorColor", "#000000");
+  for (const value of [undefined, null, "", "#abc", "red", "#11223344", " #112233", 123, {}])
+    expect(loadSettings({ cursorColor: value })).toHaveProperty("cursorColor", null);
+  expect(loadSettings({})).toHaveProperty("cursorColor", null);
+});

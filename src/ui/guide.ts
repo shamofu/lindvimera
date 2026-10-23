@@ -30,6 +30,9 @@ export function renderCommandGuide(
   const count = child(container, "p", "setting-item-description");
   count.setAttribute("role", "status");
   const results = child(container, "div", "lindvimera-guide-results");
+  results.tabIndex = 0;
+  results.setAttribute("role", "region");
+  results.setAttribute("aria-label", "操作一覧");
   const refresh = () => {
     const query = search.value.trim().toLocaleLowerCase();
     const terms = query.split(/\s+/u).filter(Boolean);
@@ -49,6 +52,7 @@ export function renderCommandGuide(
       return terms.every((term) => text.includes(term));
     });
     results.replaceChildren();
+    results.scrollTop = 0;
     count.textContent = `${entries.length}件の操作`;
     if (!entries.length) child(results, "p", "", "一致する操作はありません。");
     for (const entry of entries) {
@@ -85,6 +89,7 @@ export function openCommandGuide(app: App, settings: () => LindvimeraSettings): 
     override onOpen(): void {
       this.titleEl.textContent = "Lindvimeraの操作ガイド";
       this.modalEl.classList.add("lindvimera-guide-modal");
+      this.contentEl.classList.add("lindvimera-guide-content");
       renderCommandGuide(this.contentEl, settings).focus();
     }
 

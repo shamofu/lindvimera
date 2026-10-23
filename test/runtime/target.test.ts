@@ -4,8 +4,30 @@ import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { vim, vimTarget, Vim, getCM } from "@replit/codemirror-vim";
 import { NativeHostFixture } from "../table/host-fixture";
+import { editorSession } from "../../src/runtime/editor";
 const hosts: NativeHostFixture[] = [];
 const views: EditorView[] = [];
+
+it("makes the common cursor color available to regenerated native table editors without rebinding them", () => {
+  const host = new NativeHostFixture("| A | B |\n| --- | --- |\n| one | two |");
+  hosts.push(host);
+  const cell = host.tableCell!.cm;
+  const state = cell.state;
+  host.settings.cursorColor = "#123abc";
+  editorSession(host.cm)!.configure();
+  expect(cell.dom.closest(".lindvimera-custom-cursor")).toBe(host.cm.dom);
+  expect(host.cm.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+  expect(host.tableCell!.cm).toBe(cell);
+  expect(cell.state).toBe(state);
+  host.focus({ row: 1, column: 1, offset: 0 });
+  const next = host.tableCell!.cm;
+  expect(next).not.toBe(cell);
+  expect(next.dom.closest(".lindvimera-custom-cursor")).toBe(host.cm.dom);
+  host.settings.cursorColor = null;
+  editorSession(host.cm)!.configure();
+  expect(next.dom.closest(".lindvimera-custom-cursor")).toBeNull();
+  expect(host.cm.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+});
 beforeAll(() => {
   Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
   Range.prototype.getBoundingClientRect ??= () => new DOMRect();
