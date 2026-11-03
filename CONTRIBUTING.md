@@ -6,7 +6,7 @@
 
 GitHub Issuesで既存の報告を確認し、次の情報を添えてください。
 
-- Windows・Obsidian・Lindvimeraのバージョン、Source／Live Previewの別、本文／テーブルセルの別。
+- Windows・Obsidian・Lindvimeraのバージョン、Source／Live Previewの別、本文／テーブルセルの別、選択エンジンとホストVim設定。
 - 最小限の再現用Markdown、操作前のカーソル位置、モード、入力したキー列、期待する結果と実際の結果。
 - 関係する設定と、他のプラグインを無効にした独立Vaultでも再現するか。
 
@@ -24,7 +24,9 @@ pnpm audit:dependencies
 pwsh -NoProfile -File test/release/publish.test.ps1
 ```
 
-`pnpm check`はOxlint、整形確認、型検査、Obsidian公式Lint、単体テスト、ビルドを実行します。公式Lintだけを実行するときも、先に`pnpm typecheck`で上流の型宣言を生成してください。入力やObsidianとの連携を変更した場合は、Windows・Obsidian 1.14.4で`pnpm test:e2e`も実行します。手動確認には`pnpm probe`を使います。これらは専用Vaultとprofileを使い、生成物や診断結果はコミットしません。
+`pnpm check`はOxlint、整形確認、型検査、Obsidian公式Lint、単体テスト、ビルドを実行します。公式Lintだけを実行するときも、先に`pnpm typecheck`で上流の型宣言を生成してください。入力やObsidianとの連携を変更した場合は、Windows・Obsidian 1.15.0以降で`pnpm test:e2e`も実行します。内蔵エンジンは`node scripts/probe/builtin-ci.mjs`で実際のネイティブVimとadapterを確認します。手動確認には`pnpm probe`を使います。これらは専用Vaultとprofileを使い、生成物や診断結果はコミットしません。
+
+エンジン境界を変更した場合は`pnpm test:engines`と`pnpm verify:engines`で、片方のソースとテストを物理的に除いた環境も確認します。依存関係を新規インストールして検証するときは`pnpm verify:engines --install`を使い、通常のコピー済み依存環境とは区別して報告します。詳しくは[エンジンの削除手順](docs/engine-removal.md)を参照してください。
 
 prepare・build・typecheck・testは同じ上流生成先を使うため、並列実行しないでください。実機環境の指定やsuiteの範囲は[検証手順](docs/development.md#検証)に記載しています。
 

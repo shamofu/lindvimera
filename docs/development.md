@@ -2,6 +2,16 @@
 
 利用者向けの操作・設定・対応環境は[README](../README.md)を参照してください。この文書はビルド、実装の境界、上流ソース、検証の契約を定義します。
 
+対象はWindows・Obsidian 1.15.0以降です。ホストとの互換性は[互換性一覧](obsidian-115-compatibility.md)、片方の実装を物理的に除く手順は[エンジンの削除](engine-removal.md)を参照してください。
+
+## エンジンと寿命
+
+`src/engines/registry.ts`だけがエンジンdescriptor、純粋な割り当て解析、遅延ローダーをまとめます。共有コードは具体的なbackend型をimportせず、`EngineBackend`とruntime v2 facadeへ接続します。同梱が既定、内蔵は実験的です。選択は保存後のreloadで適用し、明示した選択の起動時だけホスト`vimMode`を同期します。旧設定で選択がない場合はホストflagを保持します。
+
+未選択の実装は初期化・エディタ登録を行いません。flagの競合は即座に入力を停止し、別エンジンへ自動fallbackしません。破棄時には所有するmapping・scope・extension・wrapperだけを解除し、適用済みホストflagは維持します。設定・割り当ては共有し、レジスタ・マーク・マクロ・検索・モード・Undoはエンジン間で転送しません。削除済みIDは中央のselection処理で生存する既定値へ移行します。
+
+以下の具体的なadapter／履歴／Exの説明は同梱エンジンの契約です。内蔵エンジンは`window.CodeMirrorAdapter.Vim`と実際のnative adapterを使い、ホストのエディタ・表セルごとのVim状態を維持します。同梱のadapterを構築したり、そのテストで内蔵の検証を代用したりしません。
+
 ## ビルドと配布
 
 Git、Node.js 24系（24.15.0以上）、pnpm **12.10.1**を使用します。ルートでサブモジュールを初期化し、ロックファイルどおりに依存を取得します。
@@ -33,26 +43,26 @@ pnpm check
 
 LinderaのJavaScript・WASM・LICENSEは、lockfileに従ってインストールした`lindera-wasm`パッケージを使用します。`scripts/lindera-assets.mjs`は別配布のIPADIC辞書ZIPだけを取得し、SHA-256を検証して展開します。完全辞書9ファイルは比較検証用にcacheへ保持し、配布物には`dict.words`・`dict.wordsidx`を除く7ファイルを同梱します。同梱する各ファイルのバイト列と語彙は変更しません。初回取得にはネットワークが必要で、以後はcache内のZIPも毎回検証して利用します。`dist/`、`.generated/`、`.cache/`、`.test-runtime/`、`.release/`、`.release-gate/`は生成物としてGit管理から除外します。
 
-`obsidian`、`electron`、`@codemirror/*`、`node:*`はObsidian desktopが提供するため外部依存にします。構造解析用の`@lezer/markdown` 1.8.0と、その依存である`@lezer/common` 1.5.3・`@lezer/highlight` 1.2.5は本体に同梱します。このparserの構文木は内部でのみ使用し、ホストへ渡すのは原文の数値offsetだけです。ホスト提供のCodeMirrorと共有する構文木・StateFieldへ混ぜません。Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
+`obsidian`、`electron`、`@codemirror/*`、`node:*`はObsidian desktopが提供するため外部依存にします。構造解析用の`@lezer/markdown` 1.8.0と、その依存である`@lezer/common` 1.5.3・`@lezer/highlight` 1.2.5は本体に同梱します。このparserの構文木は内部でのみ使用し、ホストへ渡すのは原文の数値offsetだけです。ホスト提供のCodeMirrorと共有する構文木・StateFieldへ混ぜません。.generatedを使う同梱Vim engineはnpm版ではなく、`.generated/codemirror-vim`のソースへ解決します。ローカル検査のCodeMirrorバージョンは`pnpm-workspace.yaml`で統一し、StateFieldやAnnotationの同一性を維持します。プラグイン本体は通常のNode.jsプロセスで実行しません。
 
 Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)です。GitHub側のアーカイブは2026年4月15日の[移転](https://discuss.codemirror.net/t/codemirrors-migration-to-forgejo/9706/8)によるものです。採用版はnpmパッケージとlockfileで固定し、更新時は公式配布情報・移転先の変更履歴・必要APIを照合します。現在の最新版であることを前提にはしません。
 
 ## 実装の境界
 
-| 所在                             | 責務                                                              |
-| -------------------------------- | ----------------------------------------------------------------- |
-| `src/main.ts`、`src/settings.ts` | Obsidian登録、組み込みVimとの排他、設定の検証・保存               |
-| `src/runtime`                    | 親エディタのVimセッション、本文・セルの編集対象、親文書の履歴     |
-| `src/navigation`                 | ノート内のマーク・ジャンプリスト、編集差分による位置追跡          |
-| `src/ex`                         | Exの構文・範囲検証、編集・検索、確認付き置換                      |
-| `src/input`                      | 対応操作、UI・モード別の入力優先順位、挿入脱出キーと候補表示      |
-| `src/ui`                         | キー割り当てフォーム、検索可能な操作ガイド                        |
-| `src/word`                       | 辞書サービス、単語・文・書記素境界、テキストオブジェクト、行cache |
-| `src/markdown`                   | Markdown構造、行編集計画、テキストオブジェクト、Surround          |
-| `src/folding`                    | ホストの折り畳み範囲・状態とVim操作の接続                         |
-| `src/table`                      | セルと親文書の座標対応、セル移動、ネイティブadapter               |
-| `test/probe`                     | 配布対象外の検証プラグイン、検証画面と入力診断・記録              |
-| `patches`                        | 上流への汎用拡張点と対応する回帰テスト                            |
+| 所在                             | 責務                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| `src/main.ts`、`src/settings.ts` | Obsidian登録、組み込みVimとの排他、設定の検証・保存                              |
+| `src/runtime`                    | 親エディタのVimセッション、本文・セルの編集対象、親文書の履歴                    |
+| `src/navigation`                 | ノート内のマーク・ジャンプリスト、編集差分による位置追跡                         |
+| `src/ex`                         | 同梱側のEx範囲評価、編集・検索、確認付き置換。共有構文は`src/input/ex-syntax.ts` |
+| `src/input`                      | 対応操作、UI・モード別の入力優先順位、挿入脱出キーと候補表示                     |
+| `src/ui`                         | キー割り当てフォーム、検索可能な操作ガイド                                       |
+| `src/word`                       | 辞書サービス、単語・文・書記素境界、テキストオブジェクト、行cache                |
+| `src/markdown`                   | Markdown構造、行編集計画、テキストオブジェクト、Surround                         |
+| `src/folding`                    | ホストの折り畳み範囲・状態とVim操作の接続                                        |
+| `src/table`                      | セルと親文書の座標対応、セル移動、ネイティブadapter                              |
+| `test/probe`                     | 配布対象外の検証プラグイン、検証画面と入力診断・記録                             |
+| `patches`                        | 上流への汎用拡張点と対応する回帰テスト                                           |
 
 カウント・レジスタ・マクロ・`.`は上流Vimのdispatcherを経由させます。親エディタのセッションを保ったまま本文とセルを編集対象として切り替え、セルの変更を親文書へ反映します。モード・記録とUndo／Redoは親ノートで共有し、セル再生成で新たな履歴を作りません。Obsidian内部table APIへのアクセスはネイティブadapterへ隔離します。
 
@@ -70,13 +80,15 @@ Lezerの公式上流は[Forgejo](https://code.haverbeke.berlin/lezer/markdown)�
 
 ## Markdown構造と折り畳み
 
-`src/markdown/editing.ts`の`buildMarkdownEditingIndex`で文脈を解析し、`markdownContentStart`と`markdownOpenLine`で本文先頭・行追加の変更計画を求めます。既存のTaskList拡張とTable拡張を有効にしたLezer構文木を使い、UTF-16の原文offsetで扱います。変更計画は元文書上の変更範囲と適用後のカーソル位置を返し、`undefined`を標準Vimへのフォールバックとします。索引は本文のdocument revision単位で再利用します。Normalの`o/O`は現在の物理行の直下／直上に追加し、引用・リスト・字下げを継続します。タスクは`[ ]`に戻し、番号付きリストの後続の同じ親の項目を連番にします。`O`では現在項目も振り直し、番号の桁数が変わる継続行の字下げも補正します。接頭辞のない継続行は字下げと引用だけ、引用内見出しは引用だけを引き継ぎます。空項目は記号を残して継続します。
+`src/markdown/editing.ts`の`buildMarkdownEditingIndex`で文脈を解析し、`markdownContentStart`と`markdownOpenLine`で本文先頭・行追加の変更計画を求めます。既存のTaskList拡張とTable拡張を有効にしたLezer構文木を使い、UTF-16の原文offsetで扱います。変更計画は元文書上の変更範囲と適用後のカーソル位置を返し、`undefined`を標準Vimへのフォールバックとします。索引は本文のdocument revision単位で再利用します。
 
-`src/markdown/editing-runtime.ts`は既存のVim action委譲口を使い、`o/O`の行追加とNormalの`I`だけを処理します。`o/O`の一回の委譲では一行だけを追加し、上流の挿入反復へカウントを任せます。挿入は委譲APIの`enterInsert`で開始し、元のactionの編集記録、`.`、マクロ、Undoグループを維持します。追加した接頭辞を挿入記録へ二重登録しません。番号の変更と後続の入力を同じUndoへまとめます。
+Normalの`o`は現在行の末尾でホストのEnter処理を実行します。Smart Listsのオン・オフ、子項目、折り畳み、空項目からの退出はObsidianの動作に従います。`O`は現在の物理行の直上へ引用・リスト・字下げの接頭辞を継続し、タスクを`[ ]`へ戻します。接頭辞のない継続行は字下げと引用だけ、引用内見出しは引用だけを引き継ぎます。番号付きリストの採番と後続項目の調整はホストへ委ね、`O`では現在と同じ番号の接頭辞を挿入します。ホスト接続時には変更計画の採番処理を無効にし、二重の振り直しを防ぎます。
+
+`src/markdown/editing-runtime.ts`は既存のVim action委譲口を使い、`o/O`の行追加とNormalの`I`を処理します。`o/O`の一回の委譲では一回の行追加処理を実行し、上流の挿入反復へカウントを任せます。挿入は委譲APIの`enterInsert`で開始し、元のactionの編集記録、`.`、マクロ、Undoグループを維持します。追加した接頭辞を挿入記録へ二重登録しません。番号の変更と後続の入力を同じUndoへまとめます。Markdown拡張が有効な本文ではInsert Enterとインデント操作もホスト処理へ接続し、Smart Listsによる子項目の扱いをホストへ委ねます。
 
 `^`は専用の条件付きmotionで本文先頭を返し、Normal・Visual・operatorで共有します。Normalの`I`も同じ本文先頭を使います。引用・リスト・タスク・ATX見出しの接頭辞を除き、空の本文では`^`は元の位置、`I`は接頭辞の直後になります。標準の最初の非空白文字を求めるmotion全体は差し替えず、他のインデント・貼り付け操作へ波及させません。
 
-各実行時に`markdownEditing`と本文の編集対象・文脈を確認し、コード・frontmatter・表・ネイティブセルや設定無効時は標準Vimへ委譲します。Visualの`I/o/O`、`J`、段落・インデント操作、InsertのEnterには適用しません。`j/k`は原文の物理行、`gj/gk`は表示行を使います。ユーザー割り当ては通常どおり先に解決し、CommandPolicyは条件付きmotionを許可して標準操作へのフォールバックを残します。
+`O/^/I`のMarkdown拡張は各実行時に`markdownEditing`と本文の編集対象・文脈を確認し、コード・frontmatter・表・ネイティブセルや設定無効時は標準Vimへ委譲します。同梱エンジンでは設定をオフにすると`o`の追加処理も無効になります。内蔵エンジンの`o`と両エンジンのInsert Enterはホストの入力処理に従います。Visualの`I/o/O`、`J`、段落操作はこの設定の対象外です。Live Previewの`j/k`は設定と独立してリスト本文からの列を維持し、Source・行単位operator・矩形選択では原文の列を使います。`j/k`は物理行を基準に折り畳み行を飛ばし、`gj/gk`は表示行を使います。ユーザー割り当ては通常どおり先に解決し、CommandPolicyは条件付きmotionを許可して標準操作へのフォールバックを残します。
 
 `src/markdown/blocks.ts`は`@lezer/markdown`の`parser.configure(TaskList)`で原文を解析します。frontmatterだけを同じUTF-16長・改行位置の空白へ置き換えてから解析し、文書直下のATX／Setext見出しと、引用外のListItemから範囲・親子関係を作ります。リストの継続行・子項目・コード・水平線の判定をインデントの正規表現だけで代用しません。既存のインラインオブジェクトと構造移動の索引は維持し、同じ文書revisionの索引を再利用します。
 
@@ -108,7 +120,7 @@ Linderaはプラグイン単位で非同期初期化し、`normal`と`decompose`
 
 表の表示・取得・フォーカス・座標照合はnative adapterへ閉じ込めます。非同期復帰中のマクロ・マッピングは共通continuationで待機し、内側の処理から再開します。失敗・取消・ノート切替・破棄では後続の再生を解除します。非同期処理の間は論理的な編集のUndoグループを保持します。
 
-Exは`src/ex/parser.ts`で略称・範囲・引数・正規表現を検証し、`src/ex/session.ts`で現在の編集対象へ範囲を解決します。内部CommandPolicyの`allowsEx`で解析済みコマンドを検査してから、本文・選択・レジスタ・履歴を更新します。手入力、マッピング、マクロ、`@:`は同じproviderを使います。上流の未検証Ex dispatcherは利用しません。
+Exは`src/input/ex-syntax.ts`で略称・範囲・引数・正規表現を検証し、`src/ex/session.ts`で現在の編集対象へ範囲を解決します。内部CommandPolicyの`allowsEx`で解析済みコマンドを検査してから、本文・選択・レジスタ・履歴を更新します。手入力、マッピング、マクロ、`@:`は同じproviderを使います。上流の未検証Ex dispatcherは利用しません。
 
 置換は元文書に対する一致を先に確定し、範囲を越える一致と書記素の途中で始終する一致を除外します。確認待ちは共通continuationとUndo保持を使い、対象view・ノート・本文が変わった場合は中止します。完了処理は一度だけ実行し、取消後の古いダイアログ入力を無視します。記録したEx入力はキー列として保持し、Visual範囲・文字としての山括弧を再生時にも復元します。
 
@@ -142,9 +154,9 @@ Vitestは`test/**/*.test.ts`の機能テストを実行します。`test/word/na
 
 `test/input/operation-coverage.test.ts`は対応する操作をデータ駆動で実行し、本文とネイティブセルのDOMキー入力から、文書・カーソル・選択・モード・レジスタ・履歴を確認します。画面座標に依存する操作と実際のObsidian UI競合は実機suiteで確認します。engineのdispatcherを直接呼ぶ既存の詳細テストも維持しますが、それだけではホストとの入力競合の合格条件にはしません。
 
-実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。`probe`と`test:e2e`は検証用の`lindvimera-test-harness`を別ビルドして導入します。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.14.4 archiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。
+実機検証は`pnpm build`、`pnpm probe`で準備した独立Vaultで行います。`probe`と`test:e2e`は検証用の`lindvimera-test-harness`を別ビルドして導入します。専用profileとVaultは`.test-runtime/`内に作成し、インストール済みObsidianと1.15.0以降のarchiveを使用します。別の配置先には`OBSIDIAN_EXECUTABLE`と`OBSIDIAN_ARCHIVE`を指定します。`node scripts/probe/run.mjs --prepare-only`はアプリを起動せず準備します。再実行は検証fixtureと設定を初期化します。
 
-検証画面、入力診断、診断ファイルの書き込みと検証用CSSはharnessだけに含めます。本番には検証機能を登録せず、古い保存設定にある`probeEnabled`も無視します。harnessは本番インスタンスの読み取り専用`runtime`（契約バージョン`1`）からVim・セッション・単語・テーブル処理の同じ実装参照を使い、エンジンを再生成しません。契約が一致しなければ検証を失敗させます。この接続口は内部検証用で、安定した外部拡張APIではありません。esbuildの入力一覧で本番への検証コード混入と、harnessへの本体・Vimエンジンの再取り込みを検査します。
+検証画面、入力診断、診断ファイルの書き込みと検証用CSSはharnessだけに含めます。本番には検証機能を登録せず、古い保存設定にある`probeEnabled`も無視します。harnessは本番インスタンスの読み取り専用`runtime`（契約バージョン`2`）の`engine`で選択・稼働状態を確認し、`backend`から稼働中の実装参照を取得します。同梱用harnessは同梱側のVim・セッション・単語・テーブル処理を共有し、内蔵用harnessはホストのVimとadapterの同一性を確認します。エンジンは再生成せず、契約や対象エンジンが一致しなければ検証を失敗させます。この接続口は内部検証用で、安定した外部拡張APIではありません。esbuildの入力一覧で本番への検証コード混入と、harnessへの本体・Vimエンジンの再取り込みを検査します。
 
 検証画面の各suiteで本文・セル編集、選択、記録再生、親Undo／Redo、ホットキー、モード切替を確認し、物理キー入力は別途確認します。実IME操作はこの検証の対象外です。`node scripts/probe/run.mjs --offline`はテストVaultのrendererでHTTP(S) fetch/XHRを失敗させ、同梱辞書での動作を検査するための模擬環境です。
 
@@ -164,7 +176,7 @@ main CIはブランチ単位のconcurrency group、Releaseはタグ名にかか�
 
 main CIではpnpm storeのcacheをbuildだけが保存し、他ジョブは復元だけを行います。キーはブランチ、OS・architecture、Node・pnpm版、lockfileとworkspace設定のhashで分けます。IPADICの検証済み辞書ZIPはbuild、Obsidianの固定installer・archiveはe2eだけが保存します。Releaseは既存setupのpnpm cache復元を任意の高速化に使い、IPADICとObsidianを固定版・hash検証付きで取得します。cacheがなくても実行でき、`node_modules`、生成ソース、dist、Vault・profile・レポートはcacheしません。
 
-自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.14.4を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
+自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.15.0以降を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
 
 Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。公開と証明生成の書き込み権限はReleaseジョブに付与します。`provenance.json`とローカル検証情報はschema 2で、repository・commit・version・今回のReleaseのrun ID／attemptとファイルhashを記録します。Actions artifact IDは使用しません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
 
@@ -177,7 +189,7 @@ Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル�
 
 タグworkflowは対象SHAがremote mainの履歴内にあること、タグとcheckout・各versionが一致することを確認します。mainの先端との一致は要求しません。上記手順でmain CIの成功を確認することは開発時の運用ですが、Releaseの実行条件として過去のCI履歴を参照しません。公開スクリプトは全6ファイルの構成・hash・出所を確認し、Attestationをリポジトリ・Release workflow・対象タグref・commitへ照合します。証明の欠落・不一致・通信失敗では下書き削除・作成・アップロード・公開を開始しません。公開処理の開始時・下書き削除前・アップロード後にタグとmainを再取得し、タグが同じSHAを指すこととmainの履歴内にあることを確認します。タグの削除・移動やmain履歴からの離脱を検知した場合は停止します。添付物のremote hashと下書き状態を照合してから公開します。公式レジストリへの申請やnpm公開は行いません。
 
-0.4.1からreleaseブランチを使わない方式へ移行します。移行時は旧Releaseの実行中・待機中ジョブと未完了の公開作業がないことを確認してください。旧・新のconcurrency groupは互いに排他しません。新方式での公開成功後、releaseブランチにmain未統合のコミットがないことを確認してローカル・リモートのreleaseブランチを削除します。過去のタグ・Releaseは保持しますが、旧タグ当時のworkflowはreleaseブランチを参照するため、廃止後の再実行は対象外です。
+過去のタグ・Releaseは保持します。廃止したreleaseブランチを参照する旧タグのworkflowは再実行の対象外です。
 
 main CIのcandidate・E2E診断は90日保持します。ReleaseでもE2E開始後の診断を出力専用artifactとして90日保存しますが、診断保存の失敗を公開条件にしません。公開にActions artifactの受け渡しはなく、保存期限は復旧条件に影響しません。
 
@@ -189,6 +201,6 @@ GitHub Releaseの本文は英語に統一し、`scripts/release/notes.mjs`がGit
 
 Releaseタイトルでversionを示すため、本文に`Lindvimera <version>`や`Verified main CI`などの検証リンクは掲載しません。変更点は専用HTMLコメントで囲み、末尾に出所の管理マーカーを非表示で保持します。検証情報は添付された`provenance.json`から参照できます。
 
-既存Releaseは`scripts/release/backfill-notes.mjs`で本文だけを更新します。まずプレビューし、`--apply`で適用します。既存の変更点領域は置換し、製品名・versionの重複行と旧`Verified main CI`行だけを除去します。その他の文章と旧schemaを含む出所マーカーは保持します。Releaseタイトル、添付ファイル、タグ、公開状態を変更せず、適用前後に添付ファイルのID・hash等を確認します。`0.1.0`は初回1commit、`0.2.0`は`0.1.0..0.2.0`の3commitが対象です。新しいworkflowはその変更を含むタグから有効になり、過去の本文更新には再ビルドやタグ変更を必要としません。
+既存Releaseは`scripts/release/backfill-notes.mjs`で本文だけを更新します。まずプレビューし、`--apply`で適用します。既存の変更点領域は置換し、製品名・versionの重複行と旧`Verified main CI`行だけを除去します。その他の文章と旧schemaを含む出所マーカーは保持します。Releaseタイトル、添付ファイル、タグ、公開状態を変更せず、適用前後に添付ファイルのID・hash等を確認します。workflowの変更はその変更を含むタグから有効になり、過去の本文更新には再ビルドやタグ変更を必要としません。
 
 GitHubのデフォルトブランチと開発先はmainを維持します。Obsidianの公式ディレクトリはデフォルトブランチのmanifestを参照し、そのversionに対応するタグのReleaseから配布物を取得するため、mainのバージョン更新と対応Releaseの公開を一続きの運用として扱ってください。詳細は[公式の提出手順](https://docs.obsidian.md/Plugins/Releasing/Submit%20your%20plugin)を参照してください。ブランチ・タグの強制更新を禁止するリポジトリルールも設定してください。
