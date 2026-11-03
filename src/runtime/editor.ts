@@ -18,20 +18,19 @@ import {
 } from "../markdown";
 import type { LindvimeraSettings } from "../settings";
 import { NativeTableSession } from "../table/session";
-import {
-  budouxSegmenter,
-  installWordProvider,
-  WordBoundaryCache,
-  type JapaneseSegmenter,
-} from "../word";
+import { budouxSegmenter, WordBoundaryCache, type JapaneseSegmenter } from "../word";
+import { installWordProvider } from "../engines/embedded/word";
 import { VimHistoryGroup } from "./history";
 import { PendingCommands } from "./pending";
 import { NavigationSession } from "../navigation/session";
 import { ExSession } from "../ex/session";
 import { PendingHints } from "../input/hints";
 import { configureFolding, clearFolding } from "../folding";
+import type { MarkdownEditingHost } from "../markdown/editing-runtime";
 
 export interface EditorHost {
+  isActive?(): boolean;
+  markdownHost?: MarkdownEditingHost;
   settings(): LindvimeraSettings;
   owner(): unknown;
   documentIdentity?(): unknown;
@@ -78,6 +77,7 @@ export class EditorSession {
   private restoreLifecycle: () => void;
   private restoreInputLifecycle?: () => void;
   private disposed = false;
+  private nativeBodyInput = false;
   private removePolicy: () => void;
   private hints: PendingHints;
   private readonly keyDecisions = new WeakMap<KeyboardEvent, InputDecision>();
@@ -144,6 +144,8 @@ export class EditorSession {
       onError: (message) => host.error?.(`${message} Sourceモードで編集してください。`),
     });
     cm.changeTransformer = (update, changes) => {
+      // Enter is recorded as an operation, not the prefix/renumber transactions it emits.
+      if (this.nativeBodyInput) return [];
       if (
         update.transactions.every(
           (transaction) =>
@@ -192,6 +194,7 @@ export class EditorSession {
     };
     this.listen("keydown", (event) => this.keydown(event as KeyboardEvent));
     this.listen("beforeinput", (event) => {
+      if (this.host.isActive?.() === false) return;
       if (!this.isInput(event.target)) return;
       this.switchTarget();
       if (cm.state.vim?.insertMode) this.history.begin();
@@ -316,6 +319,10 @@ export class EditorSession {
     const previous = this.keyDecisions.get(event);
     if (previous) return previous;
     if (this.disposed || !this.isInput(event.target)) return "outside";
+    if (this.host.isActive?.() === false) {
+      skipVimKeyEvent(this.cm, event);
+      return "outside";
+    }
     this.hints.hide();
     this.switchTarget();
     // Stopping a macro does not always emit command-done. Apply the pending
@@ -412,7 +419,7 @@ export class EditorSession {
       return this.consume(event);
     }
     if (
-      native &&
+      (native || (!!this.host.markdownHost && this.host.settings().markdownEditing)) &&
       state.insertMode &&
       (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) &&
       !event.ctrlKey &&
@@ -425,7 +432,14 @@ export class EditorSession {
         recordNativeInputKey(cm: EditorSession["cm"], key: string): (() => void) | undefined;
       };
       const rollback = api.recordNativeInputKey(this.cm, key);
-      if (this.table.nativeKey(key)) {
+      let handled = false;
+      this.nativeBodyInput = !native;
+      try {
+        handled = this.cm.nativeInputHandler?.(key) ?? false;
+      } finally {
+        this.nativeBodyInput = false;
+      }
+      if (handled) {
         this.switchTarget();
         this.modeChanged();
         return this.consume(event);
@@ -544,6 +558,7 @@ export class EditorSession {
       this.scheduleWordConfiguration();
     }
     configureMarkdown(this.cm, {
+      host: this.host.markdownHost,
       motions: settings.markdownMotions,
       editing: settings.markdownEditing,
       textObjects: settings.textObjects,

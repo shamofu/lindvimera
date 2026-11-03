@@ -3,7 +3,8 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
-import { installWordProvider, WordBoundaryCache, type WordDocument } from "../../src/word";
+import { WordBoundaryCache, type WordDocument } from "../../src/word";
+import { installWordProvider } from "../../src/engines/embedded/word";
 import { createSentenceProvider } from "../../src/word/sentence";
 
 function textDocument(text: string): WordDocument {

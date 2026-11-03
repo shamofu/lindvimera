@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { App, Setting, SettingDefinition, SettingGroup } from "obsidian";
 import { LindvimeraSettingTab } from "../src/settings-tab";
 import { loadSettings, type LindvimeraSettings } from "../src/settings";
+import { defaultEngine, engineRegistry } from "../src/engines/registry";
 
 vi.mock("obsidian", () => ({
   PluginSettingTab: class {
@@ -14,6 +15,11 @@ function setup(initial: Partial<LindvimeraSettings> = {}) {
   const host = {
     settings: loadSettings(initial),
     builtinVim: vi.fn(() => false),
+    engineConflict: vi.fn(() => false),
+    engineNeedsReload: vi.fn(() => false),
+    selectEngine: vi.fn(async (engine: "embedded" | "builtin") => {
+      host.settings.engine = engine;
+    }),
     saveSettings: vi.fn<(wordsOnly?: boolean) => Promise<void>>().mockResolvedValue(undefined),
   };
   const tab = new LindvimeraSettingTab(
@@ -41,6 +47,7 @@ describe("searchable settings", () => {
     const before = structuredClone(host.settings);
     const definitions = rows(tab);
     expect(definitions.map((definition) => definition.control?.key).filter(Boolean)).toEqual([
+      "engine",
       "enabled",
       "japanese",
       "linderaMode",
@@ -87,12 +94,21 @@ describe("searchable settings", () => {
     const warning = rows(tab).find((definition) => !definition.control && !definition.render);
     if (typeof warning?.visible !== "function") throw new Error("Missing live Vim warning.");
     expect(warning.visible()).toBe(false);
-    host.builtinVim.mockReturnValue(true);
+    host.engineConflict.mockReturnValue(true);
     expect(warning.visible()).toBe(true);
   });
 });
 
 describe("settings persistence", () => {
+  it("persists the engine through the reload-only path without applying live mappings", async () => {
+    const { host, tab } = setup();
+    expect(tab.getControlValue("engine")).toBe(defaultEngine);
+    const choice = engineRegistry.at(-1)!.id;
+    await tab.setControlValue("engine", choice);
+    expect(host.settings.engine).toBe(choice);
+    expect(host.selectEngine).toHaveBeenCalledWith(choice);
+    expect(host.saveSettings).not.toHaveBeenCalled();
+  });
   it("round-trips JSON controls as arrays and timeout input as a number", async () => {
     const { host, tab } = setup();
     const escapeSequences = ["jj", "jk"];
@@ -203,8 +219,8 @@ describe("settings persistence", () => {
   });
 
   it("preserves unsupported mappings and refreshes their warning through the custom editor", async () => {
-    const { host, tab } = setup();
-    const unsupported = [{ mode: "normal", from: "Z", to: ":write<CR>" }];
+    const { host, tab } = setup({ folding: false });
+    const unsupported = [{ mode: "normal", from: "Z", to: "za" }];
     await tab.setControlValue("keyBindings", JSON.stringify(unsupported));
     expect(host.settings.keyBindings).toEqual(unsupported);
     const definition = rows(tab).find((item) => item.name === "モード別キー割り当て");
@@ -218,10 +234,10 @@ describe("settings persistence", () => {
       {} as SettingGroup,
     );
     expect(element.querySelector("textarea")).toBeNull();
-    expect(element.textContent).toContain("未対応");
+    expect(element.textContent).toContain("無効");
     const inputs = element.querySelectorAll("input");
     expect(inputs[0].value).toBe("Z");
-    expect(inputs[1].value).toBe(":write<CR>");
+    expect(inputs[1].value).toBe("za");
     const before = structuredClone(host.settings);
     host.saveSettings.mockClear();
     inputs[1].value = "dw";

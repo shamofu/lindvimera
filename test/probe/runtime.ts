@@ -1,4 +1,5 @@
 import type { InternalRuntime } from "../../src/runtime/internal";
+import type { RuntimeFacade } from "../../src/engines/runtime";
 
 // Live bindings are initialized by the harness before any suite or view is created.
 // No production implementation is imported into the harness bundle.
@@ -15,9 +16,15 @@ export let resolveNativeTable: InternalRuntime["resolveNativeTable"];
 export let parseMarkdownTable: InternalRuntime["parseMarkdownTable"];
 
 export function bindRuntime(candidate: unknown): InternalRuntime {
-  const runtime = candidate as Partial<InternalRuntime> | undefined;
-  if (!runtime || runtime.version !== 1)
-    throw new Error("Unsupported Lindvimera internal runtime. The harness requires version 1.");
+  const facade = candidate as Partial<RuntimeFacade> | undefined;
+  if (!facade || facade.version !== 2)
+    throw new Error("Unsupported Lindvimera internal runtime. The harness requires version 2.");
+  if (facade.engine?.active !== "embedded")
+    throw new Error(
+      "This harness requires the embedded backend; builtin coverage must use native adapters.",
+    );
+  const runtime = facade.backend as Partial<InternalRuntime> | undefined;
+  if (!runtime) throw new Error("The installed embedded runtime is missing getCM.");
   for (const name of [
     "getCM",
     "editorSession",

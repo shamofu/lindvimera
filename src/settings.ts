@@ -1,5 +1,6 @@
 import { checkedEscapeSettings } from "./input/escape";
 import type { LinderaMode } from "./word/service";
+import { isEngineId, type EngineId } from "./engines/selection";
 
 export type VimMode = "normal" | "insert" | "visual" | "operatorPending";
 export interface KeyBinding {
@@ -9,6 +10,8 @@ export interface KeyBinding {
 }
 
 export interface LindvimeraSettings {
+  /** Absent in legacy settings: do not take ownership of the host Vim flag. */
+  engine?: EngineId;
   enabled: boolean;
   japanese: boolean;
   linderaMode: LinderaMode;
@@ -97,6 +100,7 @@ export function loadSettings(value: unknown): LindvimeraSettings {
   };
   if (!value || typeof value !== "object") return result;
   const data = value as Partial<LindvimeraSettings>;
+  if (isEngineId(data.engine)) result.engine = data.engine;
   const flags = [
     "enabled",
     "japanese",

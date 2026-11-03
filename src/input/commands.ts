@@ -12,6 +12,7 @@ export const operatorCommands = {
   gu: "changeCase",
   gU: "changeCase",
   "g~": "changeCase",
+  "g?": "rot13",
 } as const;
 
 export interface SupportedCommand {

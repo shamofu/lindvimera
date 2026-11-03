@@ -8,6 +8,7 @@ import { structureEditingCases } from "./structure-cases";
 import { runFoldingCases } from "./folding-cases";
 import { runHintCases } from "./hint-cases";
 import { answerEx, exEditingCases, submitEx } from "./ex-cases";
+import { runSmartListCases } from "./smart-list-cases";
 
 type Check = (name: string, callback: () => void | Promise<void>) => Promise<void>;
 type Owner = { cm: EditorView; sourceMode: boolean };
@@ -52,6 +53,7 @@ export async function runHostRegression(plugin: LindvimeraPlugin, check: Check):
     setConfig(key: string, value: unknown): void;
   };
   const builtinBefore = vaultConfig.getConfig("vimMode");
+  const smartBefore = vaultConfig.getConfig("smartIndentList");
   const path = "Runtime regression.md";
   const baseline = "alpha beta\n\n| Name | Value |\n| --- | --- |\n| 日本語 | value |\n";
   const existing = plugin.app.vault.getAbstractFileByPath(path);
@@ -140,6 +142,30 @@ export async function runHostRegression(plugin: LindvimeraPlugin, check: Check):
         selection: { anchor: 0 },
         annotations: Transaction.userEvent.of("set"),
       });
+    });
+    await check("host-smart-lists-115", async () => {
+      try {
+        await runSmartListCases({
+          view: () => owner(markdown).cm,
+          editor: () => markdown.editor,
+          source: async (source) => {
+            await leaf.setViewState({
+              type: "markdown",
+              state: { file: path, mode: "source", source },
+            });
+            await settle();
+          },
+          smart: (value) => vaultConfig.setConfig("smartIndentList", value),
+        });
+      } finally {
+        vaultConfig.setConfig("smartIndentList", smartBefore);
+        await leaf.setViewState({
+          type: "markdown",
+          state: { file: path, mode: "source", source: true },
+        });
+        await settle();
+        await seedEx(baseline);
+      }
     });
     await check("host-folding", async () => {
       for (const source of [true, false]) {

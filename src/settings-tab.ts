@@ -12,10 +12,15 @@ import { checkedCursorColor, type LindvimeraSettings } from "./settings";
 import { child } from "./ui/dom";
 import { checkedMappingDraft, renderMappingEditor } from "./ui/mapping-editor";
 import { openCommandGuide } from "./ui/guide";
+import { defaultEngine, engineRegistry } from "./engines/registry";
+import type { EngineId } from "./engines/selection";
 
 interface SettingsHost extends Plugin {
   settings: LindvimeraSettings;
   builtinVim(): boolean;
+  engineConflict(): boolean;
+  engineNeedsReload(): boolean;
+  selectEngine(id: EngineId): Promise<void>;
   saveSettings(wordsOnly?: boolean): Promise<void>;
 }
 
@@ -46,6 +51,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
 
   override getControlValue(key: string): unknown {
     const settings = this.host.settings;
+    if (key === "engine") return settings.engine ?? defaultEngine;
     if (key === "escapeSequences") return JSON.stringify(settings.escapeSequences);
     if (key === "keyBindings") return JSON.stringify(settings.keyBindings, null, 2);
     if (key === "escapeTimeoutMs") return String(settings.escapeTimeoutMs);
@@ -54,6 +60,11 @@ export class LindvimeraSettingTab extends PluginSettingTab {
 
   private checkedValue(key: string, value: unknown): unknown {
     const settings = this.host.settings;
+    if (key === "engine") {
+      if (!engineRegistry.some(({ id }) => id === value))
+        throw new Error("利用できないエンジンです。");
+      return value;
+    }
     if (key === "cursorColor") return checkedCursorColor(value);
     if (Object.hasOwn(toggles, key)) {
       if (typeof value !== "boolean") throw new Error("オン・オフを指定してください。");
@@ -64,7 +75,7 @@ export class LindvimeraSettingTab extends PluginSettingTab {
       return value;
     }
     if (typeof value !== "string") throw new Error("文字列を指定してください。");
-    if (key === "keyBindings") return checkedMappingDraft(JSON.parse(value));
+    if (key === "keyBindings") return checkedMappingDraft(JSON.parse(value), settings);
     if (key === "escapeSequences") {
       const parsed: unknown = JSON.parse(value);
       if (!Array.isArray(parsed) || !parsed.every((item: unknown) => typeof item === "string"))
@@ -92,6 +103,12 @@ export class LindvimeraSettingTab extends PluginSettingTab {
 
   override async setControlValue(key: string, value: unknown): Promise<void> {
     const checked = this.checkedValue(key, value);
+    if (key === "engine") {
+      await this.host.selectEngine(checked as EngineId);
+      this.refreshDomState();
+      this.refreshMappings?.();
+      return;
+    }
     const settings = this.host.settings;
     const previousBindings = settings.keyBindings;
     const previousCursorColor = settings.cursorColor;
@@ -173,9 +190,24 @@ export class LindvimeraSettingTab extends PluginSettingTab {
   override getSettingDefinitions(): SettingDefinitionItem[] {
     const definitions: SettingDefinitionItem[] = [
       {
-        name: "組み込みVimが有効です",
-        desc: "エディタ設定の「Vimキー割り当て」を無効にするとLindvimeraが動作します。",
-        visible: () => this.host.builtinVim(),
+        name: "Vim設定が選択と異なります",
+        desc: "追加の入力処理を停止しています。エンジンを明示的に選択して再読み込みするとObsidianのVim設定を同期します。旧設定のまま使う場合は、ObsidianのVimキー割り当てを無効にしてください。",
+        visible: () => this.host.engineConflict(),
+      },
+      {
+        name: "Vimエンジン",
+        desc: "変更はプラグインの再読み込み後に反映します。組み込みVimは実験的です。モード・レジスタ・マクロなどの作業中の状態は引き継ぎません。",
+        visible: () => engineRegistry.length > 1,
+        control: {
+          type: "dropdown",
+          key: "engine",
+          options: Object.fromEntries(engineRegistry.map(({ id, label }) => [id, label])),
+        },
+      },
+      {
+        name: "エンジンの変更を保存しました",
+        desc: "反映するには、コミュニティプラグインの一覧でLindvimeraを無効にしてから再度有効にしてください。",
+        visible: () => this.host.engineNeedsReload(),
       },
     ];
     for (const [key, name] of Object.entries(toggles)) {

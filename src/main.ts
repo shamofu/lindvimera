@@ -1,56 +1,28 @@
-import { Compartment, StateEffect } from "@codemirror/state";
-import { EditorView, ViewPlugin } from "@codemirror/view";
-import { Vim } from "@replit/codemirror-vim";
-import {
-  editorInfoField,
-  MarkdownView,
-  Notice,
-  Plugin,
-  Scope,
-  type App,
-  type Events,
-  type KeymapEventHandler,
-} from "obsidian";
-import { analyseKeyBindings } from "./input/policy";
-import {
-  DEFAULT_SETTINGS,
-  loadSettings,
-  type KeyBinding,
-  type LindvimeraSettings,
-} from "./settings";
-import { editorSession, lindvimeraEditor } from "./runtime/editor";
-import { installMarkdownCommands } from "./markdown";
-import { installTableCommands } from "./table/session";
+import { Notice, Plugin, type App, type Events } from "obsidian";
+import { DEFAULT_SETTINGS, loadSettings, type LindvimeraSettings } from "./settings";
 import { LindvimeraSettingTab } from "./settings-tab";
 import { openCommandGuide } from "./ui/guide";
-import { internalRuntime } from "./runtime/internal";
 import { budouxSegmenter, type JapaneseSegmenter } from "./word";
 import { JapaneseWordService, type LinderaMode } from "./word/service";
 import embeddedAssets from "lindvimera:assets";
 import { createBundledAssetReader } from "./word/asset-reader";
+import { EngineController } from "./engines/controller";
+import { defaultEngine, engineRegistry, getEngine } from "./engines/registry";
+import { resolveEngineSelection, type EngineId } from "./engines/selection";
+import { createRuntimeFacade, type RuntimeFacade } from "./engines/runtime";
 
-interface EditorOwner {
-  cm?: EditorView;
-  tableCell?: unknown;
-  editorSuggest?: { isShowingSuggestion(): boolean; close(): void };
-}
-function ownerOf(view: EditorView): EditorOwner | undefined {
-  const info = view.state.field(editorInfoField, false) as unknown as
-    | {
-        editMode?: EditorOwner;
-        editor?: { cm?: EditorView };
-      }
-    | undefined;
-  return info?.editMode ?? info?.editor;
+interface HostConfig {
+  getConfig(key: string): unknown;
+  setConfig(key: string, value: unknown): void;
 }
 
 export default class LindvimeraPlugin extends Plugin {
-  readonly runtime = internalRuntime;
-  settings: LindvimeraSettings = { ...DEFAULT_SETTINGS };
-  private editors = new Set<{ refresh(): void; flush(): void; disable(): void }>();
-  private bindings: KeyBinding[] = [];
+  runtime!: RuntimeFacade;
+  settings: LindvimeraSettings = loadSettings(DEFAULT_SETTINGS);
+  private engine?: EngineController;
   private status?: HTMLElement;
-  private notified = false;
+  private mode = "";
+  private notifiedConflict = false;
   private words?: JapaneseWordService;
   wordsReady: Promise<void> = Promise.resolve();
 
@@ -59,11 +31,39 @@ export default class LindvimeraPlugin extends Plugin {
   }
 
   builtinVim(): boolean {
-    return (this.app as App & { isVimEnabled?(): boolean }).isVimEnabled?.() ?? false;
+    return (
+      (this.app as App & { isVimEnabled?(): boolean }).isVimEnabled?.() ??
+      (this.app.vault as unknown as HostConfig).getConfig("vimMode") === true
+    );
+  }
+
+  activeEngine(): EngineId {
+    return this.engine?.id ?? defaultEngine;
+  }
+
+  engineConflict(): boolean {
+    return this.builtinVim() !== getEngine(this.activeEngine()).nativeVim;
+  }
+
+  engineNeedsReload(): boolean {
+    return (
+      (this.settings.engine ?? defaultEngine) !== this.activeEngine() ||
+      (this.settings.engine !== undefined && this.engineConflict())
+    );
   }
 
   async onload(): Promise<void> {
     this.settings = loadSettings(await this.loadData());
+    const available = engineRegistry.map(({ id }) => id);
+    const selection = resolveEngineSelection(this.settings.engine, available, defaultEngine);
+    if (selection.migratedFrom) {
+      this.settings.engine = selection.id;
+      await this.saveData(this.settings);
+      new Notice(
+        `Lindvimera: 以前のエンジンは提供を終了したため、${getEngine(selection.id).label}へ移行しました。設定とキー割り当ては保持しています。`,
+        10000,
+      );
+    }
     this.words = new JapaneseWordService(
       createBundledAssetReader(embeddedAssets),
       () => this.refreshEditors(),
@@ -75,140 +75,37 @@ export default class LindvimeraPlugin extends Plugin {
         );
       },
     );
-    installMarkdownCommands();
-    installTableCommands();
-    this.applyBindings();
     this.status = this.addStatusBarItem();
-    this.addSettingTab(new LindvimeraSettingTab(this.app, this));
-
-    this.registerEditorExtension(
-      ViewPlugin.define((view) => {
-        const compartment = new Compartment();
-        let alive = true;
-        let installed = false;
-        let initialized = false;
-        let scheduled = false;
-        let guardedScope: Scope | null = null;
-        let controlGuard: KeymapEventHandler | undefined;
-        let guardedView: MarkdownView | undefined;
-        let parentScope: Scope | null = null;
-        const releaseScope = () => {
-          if (guardedScope && controlGuard) guardedScope.unregister(controlGuard);
-          if (guardedView?.scope === guardedScope) guardedView.scope = parentScope;
-          guardedScope = null;
-          guardedView = undefined;
-          controlGuard = undefined;
-        };
-        const ensureScope = () => {
-          if (!alive || !installed) return;
-          const info = view.state.field(editorInfoField, false);
-          if (!(info instanceof MarkdownView)) return;
-          if (guardedView === info && info.scope === guardedScope) return;
-          releaseScope();
-          guardedView = info;
-          parentScope = info.scope;
-          // An appended callback loses to the host's existing Escape handler.
-          // A child scope decides editor keys before delegating to the host.
-          guardedScope = new Scope(parentScope ?? this.app.scope);
-          controlGuard = guardedScope.register(null, null, (event) => {
-            const result = editorSession(view)?.routeKey(event);
-            return result === "handled" ? false : result === "ime" ? true : undefined;
-          });
-          info.scope = guardedScope;
-        };
-        const suggestion = () => ownerOf(view)?.editorSuggest;
-        const cancelInputUI = () => {
-          const current = suggestion();
-          if (!current?.isShowingSuggestion()) return false;
-          current.close();
-          return true;
-        };
-        const instance = {
-          flush() {
-            editorSession(view)?.flush();
-          },
-          disable() {
-            editorSession(view)?.finishInsert();
-            releaseScope();
-            if (installed) view.dispatch({ effects: compartment.reconfigure([]) });
-            installed = false;
-          },
-          refresh: () => {
-            if (scheduled || !alive) return;
-            scheduled = true;
-            queueMicrotask(() => {
-              scheduled = false;
-              if (!alive) return;
-              const owner = ownerOf(view);
-              // Native cells also receive workspace extensions. Only the parent owns Vim.
-              if (!owner || owner.cm !== view) return;
-              const enabled = this.settings.enabled && !this.builtinVim();
-              if (!initialized) {
-                initialized = true;
-                view.dispatch({ effects: StateEffect.appendConfig.of(compartment.of([])) });
-              }
-              if (enabled === installed) {
-                ensureScope();
-                editorSession(view)?.configure();
-                return;
-              }
-              instance.flush();
-              if (!enabled) {
-                editorSession(view)?.finishInsert();
-                releaseScope();
-              }
-              installed = enabled;
-              view.dispatch({
-                effects: compartment.reconfigure(
-                  enabled
-                    ? lindvimeraEditor({
-                        settings: () => this.settings,
-                        wordSegmenter: () => this.wordSegmenter(),
-                        owner: () => ownerOf(view),
-                        documentIdentity: () => view.state.field(editorInfoField, false)?.file,
-                        inputUI: () => {
-                          const overlays =
-                            view.dom.ownerDocument.querySelectorAll(".modal-container, .menu");
-                          if ([...overlays].some((element) => element.getClientRects().length))
-                            return "blocked";
-                          return suggestion()?.isShowingSuggestion() ? "suggestion" : "none";
-                        },
-                        cancelInputUI,
-                        focusChanged: ensureScope,
-                        modeChanged: (mode) => {
-                          if (
-                            view.dom.contains(view.dom.ownerDocument.activeElement) ||
-                            !this.status?.textContent
-                          )
-                            this.showMode(mode);
-                        },
-                        error: (message) => new Notice(`Lindvimera: ${message}`),
-                        openLink: (linktext) => {
-                          const info = view.state.field(editorInfoField, false);
-                          if (info?.file)
-                            void this.app.workspace.openLinkText(linktext, info.file.path, false);
-                        },
-                      })
-                    : [],
-                ),
-              });
-              ensureScope();
-            });
-          },
-          destroy: () => {
-            alive = false;
-            releaseScope();
-            this.editors.delete(instance);
-          },
-        };
-        this.editors.add(instance);
-        instance.refresh();
-        return instance;
-      }),
+    this.engine = new EngineController(getEngine(selection.id), {
+      app: this.app,
+      settings: () => this.settings,
+      wordSegmenter: () => this.wordSegmenter(),
+      nativeVim: () => this.builtinVim(),
+      setNativeVim: (enabled) => {
+        const vault = this.app.vault as unknown as HostConfig;
+        if (typeof vault.setConfig !== "function")
+          throw new Error("ObsidianのVim設定を同期できません。1.15以降が必要です。");
+        vault.setConfig("vimMode", enabled);
+      },
+      registerEditorExtension: (extension) => this.registerEditorExtension(extension),
+      reportMode: (mode) => {
+        this.mode = mode;
+        this.showMode();
+      },
+      reportError: (message) => {
+        new Notice(`Lindvimera: ${message}`, 10000);
+        this.showMode();
+      },
+    });
+    this.runtime = createRuntimeFacade(
+      this.engine,
+      () => this.settings.engine ?? defaultEngine,
+      available,
     );
+    this.addSettingTab(new LindvimeraSettingTab(this.app, this));
     this.registerEvent(
       (this.app.vault as unknown as Events).on("config-changed", (key: unknown) => {
-        if (key === "vimMode") this.refreshEditors();
+        if (key === "vimMode" || key === "smartIndentList") this.refreshEditors();
       }),
     );
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refreshEditors()));
@@ -225,54 +122,65 @@ export default class LindvimeraPlugin extends Plugin {
         void this.saveSettings();
       },
     });
+    await this.engine.start();
     this.refreshEditors();
     if (this.settings.japanese) this.wordsReady = this.words.load();
   }
 
-  private showMode(mode: string): void {
-    if (this.status)
-      this.status.textContent =
-        this.settings.showStatus && this.settings.enabled && !this.builtinVim()
-          ? `Lindvimera ${mode}`
-          : "";
+  private showMode(): void {
+    if (!this.status) return;
+    if (!this.settings.showStatus || !this.settings.enabled) {
+      this.status.textContent = "";
+      return;
+    }
+    const status = this.engine?.status;
+    const text =
+      status === "failed"
+        ? "起動失敗"
+        : status === "suspended"
+          ? "停止中（Vim設定を確認）"
+          : this.mode;
+    this.status.textContent = `Lindvimera ${text}${this.engineNeedsReload() ? " · 再読み込み待ち" : ""}`;
   }
 
   private refreshEditors(): void {
-    if (this.builtinVim() && this.settings.enabled && !this.notified) {
-      this.notified = true;
+    this.engine?.refresh();
+    const conflict = this.settings.enabled && this.engineConflict();
+    if (conflict && !this.notifiedConflict)
       new Notice(
-        "Lindvimera: 設定 → エディタ → Vimキー割り当てを無効にしてください。組み込みVimが有効な間、Lindvimeraは停止します。",
+        this.settings.engine === undefined
+          ? "Lindvimera: ObsidianのVim設定が既定のエンジンと異なるため停止しています。エンジンを明示的に選択して再読み込みしてください。"
+          : "Lindvimera: ObsidianのVim設定が選択したエンジンと異なるため、追加の入力処理を停止しました。プラグインを再読み込みすると選択を反映します。",
         10000,
       );
-    }
-    if (!this.builtinVim()) this.notified = false;
-    for (const editor of this.editors) editor.refresh();
-    if (!this.settings.enabled || this.builtinVim() || !this.settings.showStatus) this.showMode("");
+    this.notifiedConflict = conflict;
+    this.showMode();
   }
 
-  private applyBindings(): void {
-    for (const binding of this.bindings) Vim.unmap(binding.from, binding.mode);
-    this.bindings = analyseKeyBindings(this.settings.keyBindings, this.settings).active.map(
-      (binding) => ({
-        ...binding,
-      }),
-    );
-    for (const binding of this.bindings) Vim.map(binding.from, binding.to, binding.mode);
+  /** Persist a pending choice without flushing, rebinding or changing host Vim. */
+  async selectEngine(id: EngineId): Promise<void> {
+    getEngine(id);
+    const previous = this.settings.engine;
+    this.settings.engine = id;
+    try {
+      await this.saveData(this.settings);
+    } catch (error) {
+      if (previous === undefined) delete this.settings.engine;
+      else this.settings.engine = previous;
+      throw error;
+    }
+    this.showMode();
   }
 
-  async saveSettings(wordsOnly = false): Promise<void> {
-    if (!wordsOnly) {
-      for (const editor of this.editors) editor.flush();
-      this.applyBindings();
-    }
+  async saveSettings(appearanceOnly = false): Promise<void> {
+    this.engine?.applySettings(appearanceOnly);
     if (this.settings.japanese && this.words) this.wordsReady = this.words.load();
     await this.saveData(this.settings);
     this.refreshEditors();
   }
 
   onunload(): void {
-    for (const editor of this.editors) editor.disable();
+    this.engine?.dispose();
     this.words?.dispose();
-    for (const binding of this.bindings) Vim.unmap(binding.from, binding.mode);
   }
 }

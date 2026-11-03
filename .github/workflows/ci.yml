@@ -77,6 +77,10 @@ jobs:
     needs: build
     runs-on: windows-2025
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [embedded, builtin]
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -90,17 +94,23 @@ jobs:
         uses: actions/cache/restore@v6.1.0
         with:
           path: |
-            .cache/obsidian/1.14.4/*.exe
-            .cache/obsidian/1.14.4/*.asar.gz
-          key: obsidian-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.ref }}-1.14.4-28662520368d5956df7798076b8370ac730164a8863dcd4f678ced53f63faa00-d1ed428c363968774f0f3906e67d8a53a058ece0b6cdd924b07865977b2ada21
+            .cache/obsidian/1.15.0/*.exe
+            .cache/obsidian/1.15.0/*.asar.gz
+          key: obsidian-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.ref }}-1.15.0-b0f60c75a12f96d54cb16b9fc32919966f2ebf029d9af75d67a19ba6555e1da0-011c70f176e44f0b215597cf0d420bae424be73583f2cb0205d3e63a26a0aa40
       - name: Prepare pinned Obsidian
         run: ./scripts/probe/prepare-obsidian.ps1
-      - run: pnpm test:e2e
+      - if: matrix.engine == 'embedded'
+        run: pnpm test:e2e
+      - if: matrix.engine == 'builtin'
+        run: node scripts/probe/builtin-ci.mjs
       - if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: e2e-${{ github.sha }}
-          path: .test-runtime/results/
+          name: e2e-${{ matrix.engine }}-${{ github.sha }}
+          path: |
+            .test-runtime/results/
+            .test-runtime/builtin-115-results.json
+            .test-runtime/runs/builtin-*/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
@@ -109,8 +119,8 @@ jobs:
         uses: actions/cache/save@v6.1.0
         with:
           path: |
-            .cache/obsidian/1.14.4/*.exe
-            .cache/obsidian/1.14.4/*.asar.gz
+            .cache/obsidian/1.15.0/*.exe
+            .cache/obsidian/1.15.0/*.asar.gz
           key: ${{ steps.obsidian.outputs.cache-primary-key }}
 
   release-ready:

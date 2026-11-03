@@ -1,6 +1,6 @@
 import type { LindvimeraSettings, VimMode } from "../settings";
 import { SUPPORTED_COMMANDS, SUPPORTED_EXTENSIONS, type SupportedCommand } from "./commands";
-import { analyseKeyBindings } from "./policy";
+import { analyseKeyBindings } from "./analysis";
 
 export interface CommandGuideEntry {
   keys: string;
@@ -66,6 +66,7 @@ const groups: readonly [string, string, string, string, string][] = [
   ],
   ["> < =", "編集", "インデント", "範囲を右・左へ字下げ、または自動調整します。", ">>"],
   ["gu gU g~", "編集", "大小文字の変換", "範囲を小文字・大文字・大小反転へ変換します。", "gUiw"],
+  ["g?", "編集", "ROT13変換", "範囲内の英字をROT13で変換します。同じ操作で元に戻ります。", "g?iw"],
   [
     "x X D Y <Del> <BS>",
     "編集",
@@ -267,7 +268,10 @@ export function commandDescription(
       ? {
           category: "モード",
           label: `Markdownの行を${direction}に追加`,
-          description: `現在の物理行の直${direction}に行を追加し、Markdownのリスト接頭辞を継続します。記号のない継続行は字下げと引用だけを引き継ぎ、タスクは未完了へ戻します。番号付きリストは${keys === "o" ? "現在の次の番号" : "現在と同じ番号"}で追加し、後続の同じ親の項目も連番にします。見出しの#は複製しません。コード・frontmatter・表・ネイティブセルでは標準の行追加です。`,
+          description:
+            keys === "o"
+              ? "Markdown本文の行末でObsidianのEnterを実行します。Smart Listsが有効なら、展開した親項目には最初の子、折り畳んだ親項目には子孫の後に項目を追加します。接頭辞・番号・字下げはObsidianの設定に従います。"
+              : "現在の物理行の直上にMarkdown行を追加し、リスト・引用の接頭辞を引き継ぎます。タスクは未完了へ戻し、番号は現在と同じ番号で挿入します。Smart Listsが有効な場合の番号調整はObsidianに従います。見出しの#は複製しません。コード・frontmatter・表・ネイティブセルでは標準の行追加です。",
           example: keys,
         }
       : {

@@ -2,7 +2,8 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import { DEFAULT_SETTINGS } from "../settings";
 import { resolveNativeTable } from "../table/native-adapter";
 import { parseMarkdownTable } from "../table/source";
-import { budouxSegmenter, installWordProvider, WordBoundaryCache, wordSpans } from "../word";
+import { budouxSegmenter, WordBoundaryCache, wordSpans } from "../word";
+import { installWordProvider } from "../engines/embedded/word";
 import { editorSession, lindvimeraEditor } from "./editor";
 
 /** Internal fixture contract, not a supported third-party extension API.

@@ -4,9 +4,10 @@ import { EditorView } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
 import { configureMarkdown, installMarkdownCommands, clearMarkdown } from "../../src/markdown";
+import type { MarkdownEditingHost } from "../../src/markdown/editing-runtime";
 
 const views: EditorView[] = [];
-function editor(text: string, at = 0) {
+function editor(text: string, at = 0, host?: MarkdownEditingHost) {
   const view = new EditorView({
     parent: document.body,
     state: EditorState.create({
@@ -17,8 +18,14 @@ function editor(text: string, at = 0) {
   });
   views.push(view);
   const cm = getCM(view)!;
+  // jsdom has no line geometry; keep the host layout boundary deterministic.
+  if (host)
+    cm.findPosV = (head, amount) => ({
+      line: Math.max(0, Math.min(view.state.doc.lines - 1, head.line + amount)),
+      ch: head.ch,
+    });
   const configure = (editing = true) =>
-    configureMarkdown(cm, { motions: true, textObjects: true, surround: true, editing });
+    configureMarkdown(cm, { motions: true, textObjects: true, surround: true, editing, host });
   configure();
   return {
     view,
@@ -51,6 +58,96 @@ afterEach(() => {
 });
 
 describe("Markdown line editing through the actual Vim dispatcher", () => {
+  it("opens below through host Enter at EOL without applying local renumbering", () => {
+    const e = editor("1. first\n2. next", 3, {
+      smartLists: () => true,
+      livePreview: () => true,
+      enter() {
+        expect(e.cm.getCursor()).toMatchObject({ line: 0, ch: 8 });
+        e.view.dispatch(e.view.state.replaceSelection("\nHOST "));
+        return true;
+      },
+      indent: () => false,
+    });
+    e.keys("oadded<Esc>");
+    expect(e.cm.getValue()).toBe("1. first\nHOST added\n2. next");
+  });
+
+  it("keeps host Smart Lists OFF semantics on open below and dot replay", () => {
+    const e = editor("- first", 0, {
+      smartLists: () => false,
+      livePreview: () => false,
+      enter() {
+        e.view.dispatch(e.view.state.replaceSelection("\n"));
+        return true;
+      },
+      indent: () => false,
+    });
+    e.keys("oX<Esc>.");
+    expect(e.cm.getValue()).toBe("- first\nX\nX");
+  });
+
+  it("retains O task prefixes while leaving native ordered renumbering to the host", () => {
+    const e = editor("9. [x] first\n10. next", 0, {
+      smartLists: () => true,
+      livePreview: () => true,
+      enter: () => {
+        throw new Error("O must not send Enter");
+      },
+      indent: () => false,
+    });
+    e.keys("Oadded<Esc>");
+    expect(e.cm.getValue()).toBe("9. [ ] added\n9. [x] first\n10. next");
+  });
+
+  it("keeps the content-relative column across unequal Live Preview list prefixes", () => {
+    const e = editor("9. abcdef\n10. [ ] abcdef\n11. abcdef\n12. x\n13. abcdef", 5, {
+      smartLists: () => true,
+      livePreview: () => true,
+      enter: () => false,
+      indent: () => false,
+    });
+    for (const ch of [10, 6, 4, 6]) {
+      e.keys("j");
+      expect(e.cm.getCursor().ch).toBe(ch);
+    }
+    e.keys("2k");
+    expect(e.cm.getCursor()).toMatchObject({ line: 2, ch: 6 });
+  });
+
+  it("keeps Source columns and operator j/k on physical lines", () => {
+    let live = false;
+    const e = editor("- abcdef\n- [ ] abcdef\n123. abcdef", 4, {
+      smartLists: () => true,
+      livePreview: () => live,
+      enter: () => false,
+      indent: () => false,
+    });
+    e.keys("j");
+    expect(e.cm.getCursor()).toMatchObject({ line: 1, ch: 4 });
+    live = true;
+    e.keys("dk");
+    expect(e.cm.getValue()).toBe("123. abcdef");
+    expect(Vim.getRegisterController().getRegister('"').toString()).toBe(
+      "- abcdef\n- [ ] abcdef\n",
+    );
+  });
+
+  it("retains the dollar goal and resets the relative goal after horizontal or external movement", () => {
+    const e = editor("- abc\n- [ ] abcdef\n- abcdef", 0, {
+      smartLists: () => true,
+      livePreview: () => true,
+      enter: () => false,
+      indent: () => false,
+    });
+    e.keys("$j");
+    expect(e.cm.getCursor()).toMatchObject({ line: 1, ch: 11 });
+    e.keys("hj");
+    expect(e.cm.getCursor()).toMatchObject({ line: 2, ch: 6 });
+    e.cm.setCursor({ line: 0, ch: 2 });
+    e.keys("j");
+    expect(e.cm.getCursor()).toMatchObject({ line: 1, ch: 6 });
+  });
   it.each([
     ["- [x] first", "osecond<Esc>", "- [x] first\n- [ ] second"],
     ["- first", "Ozero<Esc>", "- zero\n- first"],

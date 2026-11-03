@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ownsPath } from "./engines/ownership.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+
+export function assertEngineBoundary(metafile, available) {
+  assert(metafile?.inputs, "The bundle must provide an esbuild input inventory.");
+  for (const engine of ["embedded", "builtin"].filter((engine) => !available.includes(engine)))
+    for (const input of Object.keys(metafile.inputs)) {
+      const path = relative(root, resolve(root, input)).replaceAll("\\", "/");
+      assert(
+        !ownsPath(engine, path) &&
+          !(
+            engine === "embedded" &&
+            /(?:^|\/)node_modules\/@replit\/codemirror-vim(?:-core)?\//u.test(path)
+          ),
+        `Removed engine dependency entered bundle: ${path}`,
+      );
+    }
+}
 
 /** These private parser trees must not depend on the host's Lezer module versions. */
 export function assertBundledMarkdown(metafile) {

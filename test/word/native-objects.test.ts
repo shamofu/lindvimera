@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
-import { installWordProvider } from "../../src/word";
+import { installWordProvider } from "../../src/engines/embedded/word";
 import fixtures from "./native-objects.json";
 
 // Recorded with Neovim 0.12.5: nvim -n -u NONE -i NONE --headless.

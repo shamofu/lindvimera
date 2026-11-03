@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runtimeFiles } from "../distribution.mjs";
+
+export async function hashFile(path) {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest("hex");
+}
 
 export async function hashRuntimeFiles(directory) {
   return Object.fromEntries(

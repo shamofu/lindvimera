@@ -65,26 +65,22 @@ export default class LindvimeraTestHarness extends Plugin {
   /** Fail if a suite has accidentally obtained a second Vim or session registry. */
   verifyRuntimeIdentity(view: EditorView): void {
     if (
-      this.runtime !== this.production.runtime ||
+      this.runtime !== this.production.runtime.backend ||
       Vim !== this.runtime.Vim ||
       getCM !== this.runtime.getCM ||
       editorSession !== this.runtime.editorSession
     )
       throw new Error("The harness is not bound to the installed production runtime.");
     const session = editorSession(view);
-    if (
-      !session ||
-      session !== this.production.runtime.editorSession(view) ||
-      session.cm !== getCM(view)
-    )
+    if (!session || session !== this.runtime.editorSession(view) || session.cm !== getCM(view))
       throw new Error("The harness cannot inspect the production editor's actual Vim session.");
   }
 
   verifyRuntimeVersionGuard(): void {
     try {
-      bindRuntime({ ...this.runtime, version: 2 });
+      bindRuntime({ ...this.production.runtime, version: 999 });
     } catch (error) {
-      if (error instanceof Error && error.message.includes("requires version 1")) return;
+      if (error instanceof Error && error.message.includes("requires version 2")) return;
       throw error;
     }
     throw new Error("The harness accepted an incompatible production runtime version.");

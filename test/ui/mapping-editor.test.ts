@@ -2,13 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { checkedMappingDraft, renderMappingEditor } from "../../src/ui/mapping-editor";
 import { loadSettings, type KeyBinding } from "../../src/settings";
 
-function setup(initial: KeyBinding[] = []) {
+function setup(initial: KeyBinding[] = [], settings = loadSettings({})) {
   const container = document.createElement("div");
   let saved = initial;
   const save = vi.fn(async (bindings: KeyBinding[]) => {
     saved = bindings;
   });
-  renderMappingEditor(container, { getBindings: () => saved, save });
+  renderMappingEditor(container, { getBindings: () => saved, getSettings: () => settings, save });
   const button = (label: string) =>
     Array.from(container.querySelectorAll("button")).find((item) => item.textContent === label)!;
   const edit = (index: number, field: "from" | "to", value: string) => {
@@ -60,17 +60,16 @@ describe("draft mapping form", () => {
   });
 
   it("preserves unsupported mappings with a reason and saves the structured draft once", async () => {
-    const form = setup();
+    const form = setup([], loadSettings({ folding: false }));
     form.button("割り当てを追加").click();
     form.edit(0, "from", "Q");
-    form.edit(0, "to", ":write<CR>");
+    form.edit(0, "to", "za");
     expect(form.container.textContent).toContain("無効");
-    expect(form.container.textContent).toContain("未対応");
     expect(form.button("適用").disabled).toBe(false);
     form.button("適用").click();
     expect(form.button("適用").disabled).toBe(true);
     await vi.waitFor(() => expect(form.save).toHaveBeenCalledOnce());
-    expect(form.saved()).toEqual([{ mode: "normal", from: "Q", to: ":write<CR>" }]);
+    expect(form.saved()).toEqual([{ mode: "normal", from: "Q", to: "za" }]);
     expect(form.container.textContent).toContain("無効");
   });
 

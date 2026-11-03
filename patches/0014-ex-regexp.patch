@@ -1,0 +1,12 @@
+diff --git a/packages/codemirror-vim-core/vim.js b/packages/codemirror-vim-core/vim.js
+--- a/packages/codemirror-vim-core/vim.js
++++ b/packages/codemirror-vim-core/vim.js
+@@ -945,6 +945,8 @@
+     // TODO: Expose setOption and getOption as instance methods. Need to decide how to namespace
+     // them, or somehow make them work with the existing CodeMirror setOption/getOption API.
+     setOption: setOption,
++    // Pure pattern translation for host Ex providers; does not mutate search state.
++    translateRegex: translateRegex,
+     getOption: getOption,
+     defineOption: defineOption,
+     /**@type {(name: string, prefix: string|undefined, func: ExFn) => void} */

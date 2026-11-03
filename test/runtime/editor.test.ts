@@ -13,6 +13,7 @@ import { getCM, Vim } from "@replit/codemirror-vim";
 import { editorSession, lindvimeraEditor } from "../../src/runtime/editor";
 import { DEFAULT_SETTINGS } from "../../src/settings";
 import type { JapaneseSegmenter } from "../../src/word";
+import type { MarkdownEditingHost } from "../../src/markdown/editing-runtime";
 
 const views: EditorView[] = [];
 beforeAll(() => {
@@ -27,7 +28,11 @@ afterEach(() => {
   }
   vi.useRealTimers();
 });
-function create(text = "", wordSegmenter?: () => JapaneseSegmenter | undefined) {
+function create(
+  text = "",
+  wordSegmenter?: () => JapaneseSegmenter | undefined,
+  markdownHost?: MarkdownEditingHost,
+) {
   const settings = { ...DEFAULT_SETTINGS, escapeSequences: ["jj"] };
   const view = new EditorView({
     parent: document.body,
@@ -35,7 +40,12 @@ function create(text = "", wordSegmenter?: () => JapaneseSegmenter | undefined) 
       doc: text,
       extensions: [
         history(),
-        lindvimeraEditor({ settings: () => settings, owner: () => undefined, wordSegmenter }),
+        lindvimeraEditor({
+          settings: () => settings,
+          owner: () => undefined,
+          wordSegmenter,
+          markdownHost,
+        }),
         keymap.of(defaultKeymap),
       ],
     }),
@@ -44,10 +54,80 @@ function create(text = "", wordSegmenter?: () => JapaneseSegmenter | undefined) 
   view.focus();
   return { view, settings };
 }
+it("records body host Enter for dot replay with one undo group", () => {
+  const { view } = create("- first", undefined, {
+    smartLists: () => true,
+    livePreview: () => true,
+    enter() {
+      view.dispatch(view.state.replaceSelection("\n- "), {
+        annotations: Transaction.userEvent.of("input.type"),
+      });
+      return true;
+    },
+    indent: () => false,
+  });
+  keys(view, "A");
+  keys(view, "<Enter>");
+  keys(view, "X<Esc>.");
+  expect(view.state.doc.toString()).toBe("- first\n- X\n- X");
+  keys(view, "u");
+  expect(view.state.doc.toString()).toBe("- first\n- X");
+});
+
+it("allows host Live Preview list motions independently of Markdown editing settings", () => {
+  const { view, settings } = create("- abcdef\n- [ ] abcdef", undefined, {
+    smartLists: () => true,
+    livePreview: () => true,
+    enter: () => false,
+    indent: () => false,
+  });
+  const cm = getCM(view)!;
+  cm.findPosV = (head, amount) => ({
+    line: Math.max(0, Math.min(1, head.line + amount)),
+    ch: head.ch,
+  });
+  cm.setCursor({ line: 0, ch: 4 });
+  keys(view, "j");
+  expect(cm.getCursor()).toMatchObject({ line: 1, ch: 8 });
+  settings.markdownEditing = false;
+  editorSession(view)!.configure();
+  cm.setCursor({ line: 0, ch: 4 });
+  keys(view, "j");
+  expect(cm.getCursor()).toMatchObject({ line: 1, ch: 8 });
+});
+
+it("delegates body indent operators to the host while block indent stays raw", () => {
+  const { view } = create("- first\n  - child\n- next", undefined, {
+    smartLists: () => true,
+    livePreview: () => true,
+    enter: () => false,
+    indent(more) {
+      const line = view.state.doc.lineAt(view.state.selection.main.from).number - 1;
+      const from = view.state.doc.line(line + 1).from;
+      if (more) view.dispatch({ changes: { from, insert: "HOST " } });
+      else view.dispatch({ changes: { from, to: from + 5 } });
+      return true;
+    },
+  });
+  keys(view, ">>");
+  expect(view.state.doc.toString()).toBe("HOST - first\n  - child\n- next");
+  keys(view, "<<");
+  expect(view.state.doc.toString()).toBe("- first\n  - child\n- next");
+  getCM(view)!.operation(() => Vim.handleKey(getCM(view)!, "<C-v>", "user"));
+  keys(view, ">");
+  expect(view.state.doc.toString()).toBe("    - first\n  - child\n- next");
+});
 function keys(view: EditorView, text: string) {
   for (const key of text.match(/<[^>]+>|./gu) ?? []) {
     const event = new KeyboardEvent("keydown", {
-      key: key === "<Esc>" ? "Escape" : key === "<BS>" ? "Backspace" : key,
+      key:
+        key === "<Esc>"
+          ? "Escape"
+          : key === "<BS>"
+            ? "Backspace"
+            : key === "<Enter>"
+              ? "Enter"
+              : key,
       bubbles: true,
       cancelable: true,
     });

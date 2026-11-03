@@ -78,6 +78,11 @@
       "file": "0013-command-candidates.patch",
       "purpose": "Read-only command continuations share matching and host policy without changing input, registers or macro recording",
       "tests": ["test/input/hints.test.ts"]
+    },
+    {
+      "file": "0014-ex-regexp.patch",
+      "purpose": "Expose pure embedded Vim pattern translation to the host Ex provider without mutating search state",
+      "tests": ["test/ex/parser.test.ts", "test/ex/session.test.ts"]
     }
   ]
 }

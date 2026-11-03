@@ -5,30 +5,12 @@ import type {
   vimKey,
 } from "@replit/codemirror-vim-core";
 import type { KeyBinding, LindvimeraSettings, VimMode } from "../settings";
-import { parseEx } from "../ex/parser";
+import { parseEx } from "./ex-syntax";
 
-import { operatorCommands, SUPPORTED_COMMANDS, SUPPORTED_EXTENSIONS } from "./commands";
-import type { SupportedCommand } from "./commands";
+import { operatorCommands, SUPPORTED_COMMANDS } from "./commands";
+import { analyseMappings, textObjects } from "./mapping-validation";
 export { SUPPORTED_COMMANDS, SUPPORTED_EXTENSION_KEYS } from "./commands";
 
-const nativeInsertKeys = new Set([
-  "<CR>",
-  "<Tab>",
-  "<S-Tab>",
-  "<BS>",
-  "<Del>",
-  "<Left>",
-  "<Right>",
-  "<Up>",
-  "<Down>",
-  "<Home>",
-  "<End>",
-  "<PageUp>",
-  "<PageDown>",
-  "<Space>",
-  "<lt>",
-]);
-const textObjects = new Set("wWspbB()[]{}<>\"'`");
 const supportedMotions = new Set([
   "moveToTopLine",
   "moveToMiddleLine",
@@ -113,263 +95,18 @@ function builtinAllowed(command: vimKey, context: string, keys: string): boolean
   return true;
 }
 
-export interface KeyBindingIssue {
-  binding: KeyBinding;
-  reason: string;
-}
-
-/** Keep saved definitions intact and disable only invalid definitions/dependents. */
-export function analyseKeyBindings(
-  bindings: readonly KeyBinding[],
-  settings?: LindvimeraSettings,
-): {
-  active: KeyBinding[];
-  issues: KeyBindingIssue[];
-} {
-  const failures = new Map<KeyBinding, string>();
-  for (const binding of bindings) {
-    if (
-      bindings.filter((other) => other.mode === binding.mode && other.from === binding.from)
-        .length > 1
-    )
-      failures.set(binding, `割り当てが重複しています: ${binding.mode}:${binding.from}`);
-  }
-  const checked = new Set<KeyBinding>();
-  function validate(binding: KeyBinding, chain: Set<KeyBinding>): string | undefined {
-    if (failures.has(binding)) return failures.get(binding);
-    if (checked.has(binding)) return failures.get(binding);
-    if (chain.has(binding)) return "循環するキー割り当てです。";
-    if (/^(?:<Esc>|<C-\[>)$/i.test(binding.from)) return "EscとCtrl-[は取消操作専用です。";
-    const next = new Set(chain).add(binding);
-    const reason = validateSequence(
-      binding.to,
-      binding.mode,
-      (remaining, mode) => {
-        const dependency = bindings
-          .filter((candidate) => candidate.mode === mode && remaining.startsWith(candidate.from))
-          .sort((a, b) => a.from.length - b.from.length)[0];
-        if (!dependency) return;
-        const error = validate(dependency, next);
-        return error
-          ? { error: `参照先の割り当てが無効です: ${dependency.from} (${error})` }
-          : dependency;
-      },
-      settings,
-    );
-    checked.add(binding);
-    if (reason) failures.set(binding, reason);
-    return reason;
-  }
-  for (const binding of bindings) {
-    const reason = validate(binding, new Set());
-    if (reason) failures.set(binding, reason);
-  }
-  return {
-    active: bindings.filter((binding) => !failures.has(binding)),
-    issues: [...failures].map(([binding, reason]) => ({ binding, reason })),
-  };
-}
-
-function validateSequence(
-  sequence: string,
-  initialMode: VimMode,
-  expand: (remaining: string, mode: VimMode) => KeyBinding | { error: string } | undefined,
-  settings?: LindvimeraSettings,
-): string | undefined {
-  if (/[\r\n]/u.test(sequence)) return "キー列の改行には<CR>を指定してください。";
-  const tokens = sequence.match(/<[^>]+>|./gu) ?? [];
-  let mode = initialMode;
-  // An initially Visual mapping and gv can start with any selection subtype.
-  // Track known transitions without guessing which previous selection exists.
-  let visualKind: SupportedCommand["visualKind"];
-  let operator = mode === "operatorPending" ? "d" : "";
-  let pending = "";
-  let search = false;
-  let ex: string | undefined;
-  let surround = 0;
-  let count = false;
-  let expansionCount = 0;
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (ex !== undefined) {
-      if (["<Esc>", "<C-[>", "<C-c>"].includes(token) || (token === "<BS>" && !ex)) {
-        ex = undefined;
-        continue;
-      }
-      if (token === "<CR>") {
-        try {
-          if (ex.trim()) {
-            parseEx(ex);
-            mode = "normal";
-            visualKind = undefined;
-          }
-        } catch (error) {
-          return error instanceof Error ? error.message : String(error);
-        }
-        ex = undefined;
-      } else if (token === "<C-u>") ex = "";
-      else if (token === "<BS>") ex = [...ex].slice(0, -1).join("");
-      else if (token === "<Space>") ex += " ";
-      else if (token === "<lt>") ex += "<";
-      else if ([...token].length === 1) ex += token;
-      else return `Ex入力内では未対応のキーです: ${token}`;
-      continue;
-    }
-    if (token === "<Esc>" || token === "<C-[>" || (token === "<C-c>" && mode !== "insert")) {
-      mode = "normal";
-      visualKind = undefined;
-      operator = "";
-      pending = "";
-      search = false;
-      surround = 0;
-      count = false;
-      continue;
-    }
-    if (search) {
-      if (token === "<CR>") search = false;
-      continue;
-    }
-    if (surround) {
-      surround--;
-      continue;
-    }
-    if (!pending) {
-      const dependency = expand(tokens.slice(index).join(""), mode);
-      if (dependency) {
-        if ("error" in dependency) return dependency.error;
-        if (++expansionCount > 1000) return "キー割り当ての展開が長すぎます。";
-        const from = dependency.from.match(/<[^>]+>|./gu) ?? [];
-        const to = dependency.to.match(/<[^>]+>|./gu) ?? [];
-        tokens.splice(index, from.length, ...to);
-        index--;
-        continue;
-      }
-    }
-    if (mode === "insert") {
-      if ([...token].length === 1 || nativeInsertKeys.has(token)) continue;
-      return `挿入モードでは未対応の操作です: ${token}`;
-    }
-    if (!pending && /^\d$/.test(token) && (count || token !== "0")) {
-      count = true;
-      continue;
-    }
-    count = false;
-    if (!pending && ["c", "d", "y", "ys"].includes(operator) && token === "s") {
-      if (settings && !settings.surround) return "Surroundが設定で無効です。";
-      if (operator === "c" || operator === "d") {
-        surround = operator === "c" ? 2 : 1;
-        operator = "";
-        mode = "normal";
-      } else if (operator === "y") operator = "ys";
-      else if (operator === "ys") {
-        surround = 1;
-        operator = "";
-        mode = "normal";
-      }
-      continue;
-    }
-    // Vim permits guu, gUU and g~~ as the shortened doubled operator.
-    pending += !pending && operator.length > 1 && operator.at(-1) === token ? operator : token;
-    const commands = SUPPORTED_COMMANDS.filter((entry) => entry.contexts.includes(mode));
-    const exact = commands.find((entry) => entry.keys === pending);
-    const literal = commands.find((entry) => {
-      const prefix = entry.keys.replace(/<(character|register)>$/, "");
-      return prefix !== entry.keys && pending.startsWith(prefix) && pending.length > prefix.length;
-    });
-    const extensionCandidate = SUPPORTED_EXTENSIONS.find(
-      (entry) => entry.keys === pending && entry.contexts.includes(mode),
-    );
-    // Markdown backticks override Vim's quote object only while enabled. Keep
-    // mappings to the native object usable when that extension is switched off.
-    const nativeObject =
-      literal && /^[ia]<register>$/.test(literal.keys) && textObjects.has(pending.slice(1));
-    const extension =
-      nativeObject &&
-      extensionCandidate?.feature &&
-      settings &&
-      !settings[extensionCandidate.feature]
-        ? undefined
-        : extensionCandidate;
-    if (literal && !extension) {
-      if (literal.keys.startsWith("i<") || literal.keys.startsWith("a<")) {
-        if (!textObjects.has(pending.slice(1)))
-          return `未対応のテキストオブジェクトです: ${pending}`;
-        if (mode === "visual") {
-          if (pending.slice(1) === "p") visualKind = "line";
-          else if (pending.slice(1) === "s") visualKind = "character";
-        }
-      }
-      if (/^[m'`]/.test(literal.keys) && !/^[m'`][a-z]$/.test(pending))
-        return `小文字のローカルマークだけに対応しています: ${pending}`;
-      pending = "";
-      if (mode === "operatorPending") {
-        mode = operator === "c" ? "insert" : "normal";
-        if (operator === "ys") surround = 1;
-        operator = "";
-      } else if (literal.enters) mode = literal.enters;
-      continue;
-    }
-    if (exact || extension) {
-      if (extension?.feature && settings && !settings[extension.feature])
-        return `対応する機能が設定で無効です: ${extension.keys}`;
-      const completed = pending;
-      pending = "";
-      if (completed === ":") ex = mode === "visual" ? "'<,'>" : "";
-      else if (["/", "?"].includes(completed)) search = true;
-      else if (exact?.operator) {
-        if (mode === "visual") mode = exact.operator === "change" ? "insert" : "normal";
-        else if (mode === "operatorPending") {
-          if (completed !== operator)
-            return `異なるoperatorは連続できません: ${operator}${completed}`;
-          mode = operator === "c" ? "insert" : "normal";
-          operator = "";
-        } else {
-          operator = completed;
-          mode = "operatorPending";
-        }
-      } else if (completed === "gS") {
-        surround = 1;
-        mode = "normal";
-      } else if (extension?.feature === "folding") {
-        mode = "normal";
-        visualKind = undefined;
-      } else if (mode === "operatorPending") {
-        mode = operator === "c" ? "insert" : "normal";
-        if (operator === "ys") surround = 1;
-        operator = "";
-      } else if (mode === "visual" && ["ih", "ah", "aL", "iL"].includes(completed)) {
-        visualKind = completed === "iL" ? "character" : "line";
-      } else if (exact?.enters === "visual") {
-        if (exact.togglesVisual && mode === "visual" && visualKind === exact.visualKind) {
-          mode = "normal";
-          visualKind = undefined;
-        } else {
-          mode = "visual";
-          visualKind = exact.visualKind;
-        }
-      } else if (exact?.enters) mode = exact.enters;
-      continue;
-    }
-    const partial =
-      commands.some((entry) => entry.keys.startsWith(pending)) ||
-      SUPPORTED_EXTENSIONS.some(
-        (entry) => entry.contexts.includes(mode) && entry.keys.startsWith(pending),
-      );
-    if (!partial) return `未対応の操作を含んでいます: ${pending}`;
-  }
-  if (ex?.trim()) {
-    try {
-      parseEx(ex);
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
-  }
-  return undefined;
+/** Embedded semantics are injected into the shared structural grammar. */
+export function analyseKeyBindings(bindings: readonly KeyBinding[], settings?: LindvimeraSettings) {
+  return analyseMappings(bindings, settings, {
+    strict: true,
+    parseEx: (input, pcre) => parseEx(input, { pcre }),
+  });
 }
 
 function extensionEnabled(name: string, settings: LindvimeraSettings): boolean {
   // ^ remains a supported builtin when its recorded motion falls back after a setting change.
   if (name === "lindvimeraContentStart") return true;
+  if (name === "lindvimeraContentVertical") return true;
   if (name.startsWith("lindvimeraFold")) return settings.folding;
   if (name.startsWith("lindvimeraSurround")) return settings.surround;
   if (name.startsWith("lindvimeraObject")) return settings.textObjects;
@@ -389,9 +126,17 @@ export function installCommandPolicy(
   let bindings: KeyBinding[] = [];
   const policy: CommandPolicy = {
     allowsEx(command) {
-      return ["move", "substitute", "delete", "yank", "put", "join", "sort", "nohlsearch"].includes(
-        command.name,
-      );
+      return [
+        "set",
+        "move",
+        "substitute",
+        "delete",
+        "yank",
+        "put",
+        "join",
+        "sort",
+        "nohlsearch",
+      ].includes(command.name);
     },
     allows(command, context, keys) {
       const current = settings();

@@ -3,7 +3,8 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
-import { installWordProvider, wordSpans } from "../../src/word";
+import { wordSpans } from "../../src/word";
+import { installWordProvider } from "../../src/engines/embedded/word";
 
 const views: EditorView[] = [];
 function editor(text: string, enabled = true): EditorView {

@@ -83,6 +83,77 @@ function create(text: string, target: "body" | "cell" = "body", documentIdentity
 }
 
 describe.each(["body", "cell"] as const)("Ex editing in %s", (target) => {
+  it("resolves search addresses in order, wraps, reuses search and groups Undo", () => {
+    const f = create("head\nfoo\ninside\nbar\ntail", target);
+    f.ex("/foo/,/bar/d a");
+    expect(f.errors).toEqual([]);
+    expect(f.cm.getValue()).toBe("head\ntail");
+    expect(Vim.getRegisterController().getRegister("a").toString()).toBe("foo\ninside\nbar\n");
+    expect(undoDepth(f.parent.state)).toBe(1);
+    undo(f.parent);
+    f.cm.setCursor({ line: 4, ch: 0 });
+    f.ex("/foo/+1");
+    expect(f.cm.getCursor().line).toBe(2);
+    f.ex("?foo?y b");
+    f.ex("//y c");
+    expect(Vim.getRegisterController().getRegister("b").toString()).toBe("foo\n");
+    expect(Vim.getRegisterController().getRegister("c").toString()).toBe("foo\n");
+    f.intact();
+  });
+
+  it("switches Vim pattern syntax while retaining JavaScript replacement captures", () => {
+    const f = create("a ab (a)", target);
+    f.ex("set nopcre");
+    f.ex(String.raw`s/\(/x/`);
+    expect(f.errors).toHaveLength(1);
+    expect(f.cm.getValue()).toBe("a ab (a)");
+    f.errors.length = 0;
+    f.ex(String.raw`s/\(a\)\(b\)\?/[$1,$2,$&,$$]/gI`);
+    expect(f.errors).toEqual([]);
+    expect(f.cm.getValue()).toBe("[a,,a,$] [a,b,ab,$] ([a,,a,$])");
+    undo(f.parent);
+    f.ex("s/(a)/literal/");
+    expect(f.cm.getValue()).toBe("a ab literal");
+    f.ex("set pcre");
+    f.ex("s/(a)/$1$1/");
+    expect(f.cm.getValue()).toBe("aa ab literal");
+    f.intact();
+  });
+
+  it("uses the Vim dialect for search addresses and reuses compiled queries once", () => {
+    const f = create("head\n(a)\naaa\nend", target);
+    f.ex("//y");
+    expect(f.errors).toHaveLength(1);
+    f.errors.length = 0;
+    f.ex("set nopcre");
+    f.ex("/(/y a");
+    expect(Vim.getRegisterController().getRegister("a").toString()).toBe("(a)\n");
+    f.ex("//s//</");
+    expect(f.cm.getValue()).toBe("head\n<a)\naaa\nend");
+    expect(f.errors).toEqual([]);
+    f.ex("set pcre");
+    f.intact();
+  });
+
+  it("leaves search, registers, Visual selection and Undo unchanged for invalid search addresses", () => {
+    const f = create("head\nfoo\nbar", target);
+    f.ex("s/head/head/");
+    f.keys("vl");
+    const selection = f.cm.getSelection();
+    const search = Vim.getRegisterController().getRegister("/").toString();
+    const command = Vim.getRegisterController().getRegister(":").toString();
+    const depth = undoDepth(f.parent.state);
+    for (const input of ["/missing/d", "/foo/+99d", "/bar/,/foo/d", "/[/d"]) {
+      f.ex(input);
+      expect(f.cm.getValue()).toBe("head\nfoo\nbar");
+      expect(f.cm.getSelection()).toBe(selection);
+      expect(f.cm.state.vim!.visualMode).toBe(true);
+      expect(Vim.getRegisterController().getRegister("/").toString()).toBe(search);
+      expect(Vim.getRegisterController().getRegister(":").toString()).toBe(command);
+      expect(undoDepth(f.parent.state)).toBe(depth);
+    }
+  });
+
   it("uses explicit first/last ranges and one Undo for multi-line edits", () => {
     const f = create("three\none\ntwo", target);
     f.ex("1sort");

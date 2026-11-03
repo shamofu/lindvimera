@@ -4,17 +4,19 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { distributionDirectory, runtimeFiles } from "../distribution.mjs";
 import { buildProbe, harnessId } from "./build.mjs";
-import { hashRuntimeFiles, verifyRuntimeFiles } from "./artifact-identity.mjs";
+import { hashFile, hashRuntimeFiles, verifyRuntimeFiles } from "./artifact-identity.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export async function prepareProbe({
   runtime = join(root, ".test-runtime"),
   offline = false,
   cleanInstall = false,
+  engine = "embedded",
+  harness: enableHarness = true,
   executable = process.env.OBSIDIAN_EXECUTABLE ??
     join(process.env.LOCALAPPDATA ?? "", "Programs/Obsidian/Obsidian.exe"),
   archive = process.env.OBSIDIAN_ARCHIVE ??
-    join(process.env.APPDATA ?? "", "obsidian/obsidian-1.14.4.asar"),
+    join(process.env.LOCALAPPDATA ?? "", "Programs/Obsidian/resources/obsidian.asar"),
 } = {}) {
   const profile = join(runtime, "profile");
   const vault = join(runtime, "Lindvimera Test Vault");
@@ -23,6 +25,10 @@ export async function prepareProbe({
 
   await access(executable);
   await access(archive);
+  const runtimeIdentity = {
+    executable: { path: executable, sha256: await hashFile(executable) },
+    archive: { path: archive, sha256: await hashFile(archive) },
+  };
   await mkdir(profile, { recursive: true });
   await mkdir(plugin, { recursive: true });
   const candidateHashes = await hashRuntimeFiles(distributionDirectory);
@@ -32,8 +38,8 @@ export async function prepareProbe({
     await copyFile(join(distributionDirectory, file), target);
   }
   const installedHashes = await verifyRuntimeFiles(candidateHashes, plugin);
-  await buildProbe(harness);
-  await copyFile(archive, join(profile, "obsidian-1.14.4.asar"));
+  if (enableHarness) await buildProbe(harness);
+  await copyFile(archive, join(profile, "obsidian-1.15.0.asar"));
   const config = {
     vaults: { "0000000000000017": { path: vault, ts: Date.now(), open: true } },
     updateDisabled: true,
@@ -45,12 +51,13 @@ export async function prepareProbe({
       join(plugin, "data.json"),
       JSON.stringify({
         enabled: true,
+        engine,
         escapeSequences: ["jj"],
         escapeTimeoutMs: 200,
       }),
     );
   const enabledPlugins = ["lindvimera"];
-  if (!cleanInstall) enabledPlugins.push(harnessId);
+  if (!cleanInstall && enableHarness) enabledPlugins.push(harnessId);
   if (offline) {
     const offlinePlugin = join(vault, ".obsidian", "plugins", "lindvimera-offline-probe");
     await mkdir(offlinePlugin, { recursive: true });
@@ -60,7 +67,7 @@ export async function prepareProbe({
         id: "lindvimera-offline-probe",
         name: "Lindvimera offline probe",
         version: "0.0.0",
-        minAppVersion: "1.14.4",
+        minAppVersion: "1.15.0",
         description: "Isolated test-only renderer network simulation.",
         author: "Lindvimera tests",
         isDesktopOnly: true,
@@ -113,7 +120,17 @@ module.exports = class extends Plugin {
   await rm(join(vault, ".obsidian", "core-plugins.json"), { force: true });
   const fixture = join(root, "test", "fixtures", "native-table.md");
   await copyFile(fixture, join(vault, "Native table.md"));
-  return { executable, archive, profile, vault, runtime, plugin, candidateHashes, installedHashes };
+  return {
+    executable,
+    archive,
+    profile,
+    vault,
+    runtime,
+    plugin,
+    candidateHashes,
+    installedHashes,
+    runtimeIdentity,
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

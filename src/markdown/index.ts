@@ -13,6 +13,7 @@ import {
   configureMarkdownEditing,
   clearMarkdownEditing,
   installMarkdownEditingMotion,
+  type MarkdownEditingHost,
 } from "./editing-runtime";
 
 export { indexMarkdown, markdownObject, structureMotion } from "./ranges";
@@ -21,6 +22,7 @@ export { internalLinkAt } from "./links";
 export { indexMarkdownBlocks, markdownBlockObject } from "./blocks";
 
 export interface MarkdownSettings {
+  host?: MarkdownEditingHost;
   editing?: boolean;
   motions: boolean;
   textObjects: boolean;
@@ -56,7 +58,7 @@ function lastCharacter(text: string, from: number, to: number): number {
 
 export function configureMarkdown(cm: object, options: MarkdownSettings): void {
   settings.set(cm, options);
-  configureMarkdownEditing(cm, options.editing ?? false);
+  configureMarkdownEditing(cm, options.editing ?? false, options.host);
   if (!options.surround) pending.delete(cm);
 }
 

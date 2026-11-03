@@ -15,6 +15,15 @@ export async function checkCursorColors(page) {
     page.evaluate(
       () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     );
+  // CodeMirror applies its focus class in a timer after the DOM focus event.
+  // Animation frames alone can run before that update on a fast display.
+  const waitForFocus = (focused) =>
+    page.waitForFunction((focused) => {
+      const probe = globalThis.__lindvimeraColorProbe;
+      const owner = probe.leaf.view.editMode;
+      const view = probe.native ? owner.tableCell?.cm : owner.cm;
+      return view?.hasFocus === focused && view.dom.classList.contains("cm-focused") === focused;
+    }, focused);
   async function read() {
     return page.evaluate(() => {
       const probe = globalThis.__lindvimeraColorProbe;
@@ -47,6 +56,7 @@ export async function checkCursorColors(page) {
         variable: owner.cm.dom.style.getPropertyValue("--lindvimera-cursor-color"),
         text: owner.cm.state.doc.toString(),
         focused: view.hasFocus,
+        focusClass: view.dom.classList.contains("cm-focused"),
       };
     });
   }
@@ -64,6 +74,7 @@ export async function checkCursorColors(page) {
       const owner = probe.leaf.view.editMode;
       (probe.native ? owner.tableCell.cm : owner.cm).focus();
     });
+    await waitForFocus(true);
     await settle();
   }
   try {
@@ -181,10 +192,15 @@ export async function checkCursorColors(page) {
             document.body.append(input);
             input.focus();
           });
+          await waitForFocus(false);
           await settle();
           const blurred = await read();
           assert.equal(blurred.focused, false);
-          assert.equal(blurred.block, "rgba(0, 0, 0, 0)");
+          assert.equal(
+            blurred.block,
+            "rgba(0, 0, 0, 0)",
+            JSON.stringify({ surface, theme, blurred }),
+          );
           assert.equal(blurred.outline, color);
           assert.equal(blurred.outlineStyle, "solid");
           await page.evaluate(() =>

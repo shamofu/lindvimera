@@ -1,4 +1,5 @@
 export type ExName =
+  | "set"
   | "move"
   | "substitute"
   | "delete"
@@ -9,7 +10,7 @@ export type ExName =
   | "nohlsearch";
 
 export interface ExAddress {
-  base: number | "." | "$" | { mark: string };
+  base: number | "." | "$" | { mark: string } | { search: string; delimiter: "/" | "?" };
   offset: number;
 }
 
@@ -27,11 +28,13 @@ export interface ExSyntax {
   name: ExName;
   range?: "%" | { from: ExAddress; to?: ExAddress };
   register?: string;
+  pcre?: boolean;
   substitution?: SubstituteSyntax;
   sort?: { reverse: boolean; ignoreCase: boolean; unique: boolean; numeric: boolean };
 }
 
 const commands: readonly [ExName, string][] = [
+  ["set", "se"],
   ["substitute", "s"],
   ["delete", "d"],
   ["yank", "y"],
@@ -42,7 +45,10 @@ const commands: readonly [ExName, string][] = [
 ];
 
 /** The public Ex grammar. It reads no editor, register, history or search state. */
-export function parseEx(input: string): ExSyntax {
+export function parseEx(
+  input: string,
+  options: { pcre?: boolean; translateVimPattern?: (pattern: string) => string } = {},
+): ExSyntax {
   const source = input.replace(/^\s*:?\s*/u, "");
   let index = 0;
   const space = () => {
@@ -50,6 +56,11 @@ export function parseEx(input: string): ExSyntax {
   };
   const fail = (message: string): never => {
     throw new Error(message);
+  };
+  const validatePattern = (pattern: string) => {
+    if (options.pcre !== false) new RegExp(pattern);
+    else if (options.translateVimPattern) new RegExp(options.translateVimPattern(pattern));
+    // Pure grammar consumers can defer dialect validation to the embedded evaluator.
   };
   function address(): ExAddress | undefined {
     space();
@@ -60,7 +71,23 @@ export function parseEx(input: string): ExSyntax {
       if (!Number.isSafeInteger(base) || base < 1) fail("行番号は1以上の整数で指定してください。");
       index += number[0].length;
     } else if (source[index] === "." || source[index] === "$") base = source[index++] as "." | "$";
-    else if (source[index] === "'") {
+    else if (source[index] === "/" || source[index] === "?") {
+      const delimiter = source[index++] as "/" | "?";
+      let search = "";
+      let closed = false;
+      while (index < source.length) {
+        const character = source[index++];
+        if (character === delimiter) {
+          closed = true;
+          break;
+        }
+        search += character;
+        if (character === "\\" && index < source.length) search += source[index++];
+      }
+      if (!closed) fail("検索範囲の区切り文字が閉じていません。");
+      if (search) validatePattern(unescapePattern(search, delimiter));
+      base = { search, delimiter };
+    } else if (source[index] === "'") {
       index++;
       const mark = source[index++] ?? "";
       if (!/^[a-z<>]$/u.test(mark)) fail("範囲には小文字マークかVisualマークを指定してください。");
@@ -142,7 +169,12 @@ export function parseEx(input: string): ExSyntax {
       confirm: flags.includes("c"),
       ignoreCase: caseFlag === undefined ? undefined : caseFlag === "i",
     };
-    if (pattern) new RegExp(unescapePattern(pattern, delimiter));
+    if (pattern) validatePattern(unescapePattern(pattern, delimiter));
+  } else if (name === "set") {
+    const option = source.slice(index).trim();
+    if (range || !/^(?:no)?pcre$/u.test(option))
+      fail("setにはpcreまたはnopcreだけを指定できます。");
+    result.pcre = option === "pcre";
   } else if (name === "sort") {
     const reverse = source[index] === "!";
     if (reverse) index++;

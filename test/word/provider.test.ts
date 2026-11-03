@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   createWordProvider,
-  installWordProvider,
   WordBoundaryCache,
   wordSpans,
   type WordDocument,
@@ -199,14 +198,5 @@ describe("plain-text BudouX boundaries", () => {
     expect(cache.metrics.analyses).toBe(1);
     provider.move(doc, { line: 5000, ch: 5 }, { forward: true, repeat: 1 });
     expect(cache.metrics.analyses).toBe(1);
-  });
-
-  it("installs per editor and restores the preceding provider on dispose", () => {
-    const previous = createWordProvider();
-    const cm = { state: { wordBoundaryProvider: previous } };
-    const dispose = installWordProvider(cm);
-    expect(cm.state.wordBoundaryProvider).not.toBe(previous);
-    dispose();
-    expect(cm.state.wordBoundaryProvider).toBe(previous);
   });
 });

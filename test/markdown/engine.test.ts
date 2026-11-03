@@ -4,7 +4,7 @@ import { EditorView } from "@codemirror/view";
 import { history, undo } from "@codemirror/commands";
 import { getCM, vim, vimTarget, Vim } from "@replit/codemirror-vim";
 import { configureMarkdown, installMarkdownCommands } from "../../src/markdown";
-import { installWordProvider } from "../../src/word";
+import { installWordProvider } from "../../src/engines/embedded/word";
 import { structureEditingCases } from "../probe/structure-cases";
 
 const views: EditorView[] = [];

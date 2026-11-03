@@ -63,7 +63,7 @@ describe("guide mapping availability", () => {
       entries.find((entry) => entry.keys === "gf" && entry.category === "ユーザー割り当て")?.reason,
     ).toContain("短いユーザー割り当て");
     const disabled = getGuideEntries(
-      loadSettings({ keyBindings: [{ mode: "normal", from: "g", to: ":write<CR>" }] }),
+      loadSettings({ folding: false, keyBindings: [{ mode: "normal", from: "g", to: "za" }] }),
     );
     expect(builtin(disabled, "gf").enabled).toBe(true);
   });

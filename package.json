@@ -13,7 +13,7 @@
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
-    "prepare:vendor": "node scripts/prepare-vendor.mjs",
+    "prepare:vendor": "node scripts/engines/prepare.mjs",
     "build": "node esbuild.config.mjs",
     "build:probe": "node scripts/probe/build.mjs",
     "dev": "node esbuild.config.mjs --watch",
@@ -23,12 +23,14 @@
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "typecheck": "pnpm prepare:vendor && tsc -p tsconfig.vendor-core.json && tsc -p tsconfig.vendor.json && tsc -p tsconfig.json",
+    "typecheck": "node scripts/engines/check.mjs typecheck",
     "test": "pnpm test:unit",
-    "test:unit": "pnpm prepare:vendor && vitest run",
+    "test:unit": "node scripts/engines/check.mjs test",
+    "test:engines": "node --test test/engines/removal.test.mjs",
+    "verify:engines": "node scripts/engines/verify.mjs",
     "test:e2e": "node scripts/probe/ci.mjs",
     "probe": "node scripts/probe/run.mjs",
-    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs && pnpm build"
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/engines/*.test.mjs && pnpm build"
   },
   "dependencies": {
     "@lezer/markdown": "1.8.0",

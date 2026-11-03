@@ -44,6 +44,21 @@ afterEach(() => {
 });
 
 describe("per-editor supported editing policy", () => {
+  it("allows ROT13 motions, doubled operators, Visual ranges and replay", () => {
+    const { cm, view } = editor("hello world\n日本語 abc");
+    keys(cm, "g?iw");
+    expect(view.state.doc.toString()).toBe("uryyb world\n日本語 abc");
+    keys(cm, ".");
+    expect(view.state.doc.toString()).toBe("hello world\n日本語 abc");
+    keys(cm, "g??");
+    expect(view.state.doc.toString()).toBe("uryyb jbeyq\n日本語 abc");
+    keys(cm, "jVg?");
+    expect(view.state.doc.toString()).toBe("uryyb jbeyq\n日本語 nop");
+    expect(analyseKeyBindings([{ mode: "normal", from: "Q", to: "g??" }]).issues).toEqual([]);
+    expect(
+      analyseKeyBindings([{ mode: "normal", from: "Q", to: ":set nopcre<CR>" }]).issues,
+    ).toEqual([]);
+  });
   it("filters unsupported complete and partial commands without affecting another editor", () => {
     const a = editor();
     const b = editor();
@@ -131,6 +146,8 @@ describe("per-editor supported editing policy", () => {
     remove();
     keys(cm, "g?iw");
     expect(view.state.doc.toString()).toBe("nycun beta gamma");
+    // Simulate an edit recorded by an earlier engine version outside our vocabulary.
+    cm.state.vim!.lastEditInputState!.operator = "unsupportedOperator";
     installCommandPolicy(
       cm as CodeMirrorV,
       () => DEFAULT_SETTINGS,
@@ -174,6 +191,8 @@ describe("mapping migration", () => {
     ":%s/😀/x/g<CR>@:",
     "Vj:delete a<CR>",
     ":1,$sort! iu<CR>",
+    ":/x/delete<CR>",
+    ":set nopcre<CR>:s/(/x/<CR>:set pcre<CR>",
     ":s<CR>",
     ":s/a/b/c<CR>~",
     ":<Esc>i:<Esc>",
@@ -205,7 +224,6 @@ describe("mapping migration", () => {
     ":write<CR>",
     ":s/a/b/e<CR>",
     ":delete|yank<CR>",
-    ":/x/delete<CR>",
     ":s/(/x/<CR>",
   ])("rejects unsupported Ex syntax in %s", (to) => {
     expect(analyseKeyBindings([{ mode: "normal", from: "Q", to }]).issues).toHaveLength(1);

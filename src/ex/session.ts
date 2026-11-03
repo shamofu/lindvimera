@@ -7,6 +7,7 @@ import type {
 } from "@replit/codemirror-vim-core";
 import type { PendingCommands } from "../runtime/pending";
 import type { VimHistoryGroup } from "../runtime/history";
+import { exPattern } from "./regexp";
 import {
   expandReplacement,
   parseEx,
@@ -14,7 +15,7 @@ import {
   unescapeReplacement,
   type ExAddress,
   type ExSyntax,
-} from "./parser";
+} from "../input/ex-syntax";
 
 interface Substitution {
   query: RegExp;
@@ -28,6 +29,7 @@ interface ResolvedEx extends ParsedExCommand {
   to: number;
   substitution?: Substitution;
   replacements?: Replacement[];
+  addressSearch?: RegExp;
 }
 interface Replacement {
   from: number;
@@ -63,13 +65,42 @@ export class ExSession {
     cm.state.exCommandProvider = this.provider;
   }
 
-  private resolveAddress(address: ExAddress): number {
+  private resolveAddress(
+    address: ExAddress,
+    origin: number,
+    search: { query?: RegExp; changed?: RegExp },
+  ): number {
     let line: number;
     const base = address.base;
     if (typeof base === "number") line = this.cm.firstLine() + base - 1;
     else if (base === ".") line = this.cm.getCursor().line;
     else if (base === "$") line = this.cm.lastLine();
-    else {
+    else if ("search" in base) {
+      const pattern = unescapePattern(base.search, base.delimiter);
+      const query = pattern
+        ? new RegExp(
+            exPattern(pattern, !!Vim.getOption("pcre")),
+            /[A-Z]/u.test(pattern) ? "m" : "im",
+          )
+        : search.query;
+      if (!query) throw new Error("直前の検索パターンがありません。");
+      const first = this.cm.firstLine();
+      const count = this.cm.lastLine() - first + 1;
+      const direction = base.delimiter === "/" ? 1 : -1;
+      let found: number | undefined;
+      for (let step = 1; step <= count; step++) {
+        const candidate = first + ((((origin - first + step * direction) % count) + count) % count);
+        query.lastIndex = 0;
+        if (query.test(this.cm.getLine(candidate))) {
+          found = candidate;
+          break;
+        }
+      }
+      if (found === undefined) throw new Error("検索範囲のパターンに一致する行がありません。");
+      search.query = query;
+      search.changed = query;
+      line = found;
+    } else {
       const vim = this.cm.state.vim;
       let position: Pos | null | undefined;
       if ((base.mark === "<" || base.mark === ">") && vim?.visualMode) {
@@ -89,15 +120,22 @@ export class ExSession {
 
   private parse(input: string, context: ExCommandContext): ResolvedEx {
     if (this.disposed) throw new Error("エディタは既に閉じられています。");
-    const syntax = parseEx(input);
+    const syntax = parseEx(input, {
+      pcre: !!Vim.getOption("pcre"),
+      translateVimPattern: (pattern) => exPattern(pattern, false),
+    });
+    const search = {
+      query: context.getSearch() ?? undefined,
+      changed: undefined as RegExp | undefined,
+    };
     let from = this.cm.getCursor().line;
     let to = from;
     if (syntax.range === "%") {
       from = this.cm.firstLine();
       to = this.cm.lastLine();
     } else if (syntax.range) {
-      from = this.resolveAddress(syntax.range.from);
-      to = syntax.range.to ? this.resolveAddress(syntax.range.to) : from;
+      from = this.resolveAddress(syntax.range.from, from, search);
+      to = syntax.range.to ? this.resolveAddress(syntax.range.to, from, search) : from;
     } else if (this.cm.state.vim?.visualMode) {
       from = Math.min(this.cm.state.vim.sel.anchor.line, this.cm.state.vim.sel.head.line);
       to = Math.max(this.cm.state.vim.sel.anchor.line, this.cm.state.vim.sel.head.line);
@@ -113,17 +151,27 @@ export class ExSession {
       to < from
     )
       throw new Error("範囲は現在の編集対象の先頭行から末尾行までを順に指定してください。");
-    const result: ResolvedEx = { input, name: syntax.name, syntax, from, to };
+    const result: ResolvedEx = {
+      input,
+      name: syntax.name,
+      syntax,
+      from,
+      to,
+      addressSearch: search.changed,
+    };
     if (syntax.name === "substitute") {
       const substitution = syntax.substitution;
       if (!substitution) {
         if (!this.lastSubstitution) throw new Error("直前の置換がありません。");
         result.substitution = { ...this.lastSubstitution };
       } else {
-        const previous = substitution.pattern ? undefined : context.getSearch();
+        const previous = substitution.pattern ? undefined : search.query;
         if (!substitution.pattern && !previous) throw new Error("直前の検索パターンがありません。");
         const pattern = substitution.pattern
-          ? unescapePattern(substitution.pattern, substitution.delimiter)
+          ? exPattern(
+              unescapePattern(substitution.pattern, substitution.delimiter),
+              !!Vim.getOption("pcre"),
+            )
           : previous!.source;
         const ignoreCase =
           substitution.ignoreCase ?? (previous ? previous.ignoreCase : !/[A-Z]/u.test(pattern));
@@ -147,13 +195,15 @@ export class ExSession {
   private execute(command: ResolvedEx, context: ExCommandContext): void {
     const { syntax, from, to } = command;
     const cm = this.cm;
+    if (command.addressSearch) context.setSearch(command.addressSearch);
     if (syntax.name === "substitute") {
       this.lastSubstitution = { ...command.substitution! };
       context.setSearch(command.substitution!.query);
       this.substitute(command, context);
       return;
     }
-    if (syntax.name === "nohlsearch") context.clearSearch();
+    if (syntax.name === "set") Vim.setOption("pcre", syntax.pcre);
+    else if (syntax.name === "nohlsearch") context.clearSearch();
     else if (syntax.name === "move") {
       const destination = { line: to, ch: cm.getLine(to).search(/\S/u) };
       destination.ch = Math.max(0, destination.ch);

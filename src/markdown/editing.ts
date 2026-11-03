@@ -188,6 +188,7 @@ export function markdownOpenLine(
   index: MarkdownEditingIndex,
   offset: number,
   after: boolean,
+  renumber = true,
 ): MarkdownLineEdit | undefined {
   const { text, rows } = index;
   const rowIndex = rowAt(rows, Math.max(0, Math.min(offset, text.length)));
@@ -274,7 +275,7 @@ export function markdownOpenLine(
     }
   };
   const item = row.item;
-  if (item?.number !== undefined) {
+  if (item?.number !== undefined && renumber) {
     const next = item.number + (after ? 1 : 0);
     const local = item.markerFrom - row.from;
     const insertedDelta = String(next).length - (item.markerTo - item.markerFrom - 1);

@@ -428,7 +428,9 @@ export async function runKeyboardRegression(page, sendPhysicalEscape) {
           command: "O",
           text: "9. parent\n   - child\n10. next",
           input: "before",
-          result: "9. before\n10. parent\n    - child\n11. next",
+          // Obsidian 1.15 owns numeric normalization after insert-before.
+          // Its native transaction updates the original item, preserving its descendants/siblings.
+          result: "9. before\n10. parent\n   - child\n10. next",
         },
         { command: "$c^", text: "- [ ] abcd", input: "X", result: "- [ ] Xd" },
         { command: "I", text: "> ## heading", input: "new ", result: "> ## new heading" },

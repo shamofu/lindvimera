@@ -15,10 +15,19 @@ import {
   linderaRuntimeFiles,
   prepareAssets,
 } from "./scripts/lindera-assets.mjs";
-import { prepareVendor, projectRoot } from "./scripts/prepare-vendor.mjs";
-import { assertBundleBoundary, assertBundledMarkdown } from "./scripts/build-boundaries.mjs";
+import {
+  availableEngines,
+  prepareEngineSources,
+  projectRoot,
+  vimAliases,
+} from "./scripts/engines/build.mjs";
+import {
+  assertBundleBoundary,
+  assertBundledMarkdown,
+  assertEngineBoundary,
+} from "./scripts/build-boundaries.mjs";
 
-prepareVendor();
+await prepareEngineSources();
 const watch = process.argv.includes("--watch");
 async function copyAsset(file, source = join(projectRoot, file)) {
   const destination = join(distributionDirectory, file);
@@ -38,16 +47,7 @@ const options = {
   minify: !watch,
   legalComments: "eof",
   logLevel: "info",
-  alias: {
-    "@replit/codemirror-vim": join(
-      projectRoot,
-      ".generated/codemirror-vim/packages/codemirror-vim/src/index.ts",
-    ),
-    "@replit/codemirror-vim-core": join(
-      projectRoot,
-      ".generated/codemirror-vim/packages/codemirror-vim-core/vim.js",
-    ),
-  },
+  alias: vimAliases(),
   external: ["obsidian", "electron", "@codemirror/*", "node:*"],
   banner: {
     js: "/* Lindvimera — generated bundle. Licenses and adapted source are retained below. */",
@@ -87,7 +87,13 @@ const options = {
         build.onEnd(async (result) => {
           if (result.errors.length === 0) {
             assertBundleBoundary(result.metafile, "production");
+            assertEngineBoundary(result.metafile, availableEngines());
             assertBundledMarkdown(result.metafile);
+            await mkdir(join(projectRoot, ".test-runtime/build"), { recursive: true });
+            await writeFile(
+              join(projectRoot, ".test-runtime/build/production-metafile.json"),
+              JSON.stringify(result.metafile, null, 2) + "\n",
+            );
             const bundlePath = join(distributionDirectory, "main.js");
             const footer = await Promise.all(
               retainedFiles.map(async (file) => {

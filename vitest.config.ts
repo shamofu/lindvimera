@@ -1,5 +1,6 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { vimAliases } from "./scripts/engines/build.mjs";
 
 export default defineConfig({
   plugins: [
@@ -12,17 +13,7 @@ export default defineConfig({
     },
   ],
   resolve: {
-    alias: {
-      "@replit/codemirror-vim": fileURLToPath(
-        new URL(
-          "./.generated/codemirror-vim/packages/codemirror-vim/src/index.ts",
-          import.meta.url,
-        ),
-      ),
-      "@replit/codemirror-vim-core": fileURLToPath(
-        new URL("./.generated/codemirror-vim/packages/codemirror-vim-core/vim.js", import.meta.url),
-      ),
-    },
+    alias: vimAliases(fileURLToPath(new URL(".", import.meta.url))),
   },
   test: {
     include: ["test/**/*.test.ts"],

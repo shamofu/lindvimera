@@ -123,6 +123,30 @@ it("records a completed physical Ex prompt and replays the command once", () => 
   expect(f.errors).toEqual([]);
 });
 
+it.each(["mapping", "macro"])(
+  "keeps search ranges, Vim patterns, confirmation and suffix in one Undo for %s",
+  async (replay) => {
+    const f = create("head\nfoo foo\nbar\ntail");
+    const command = String.raw`:set nopcre<CR>:/foo/,/bar/s/\(foo\)/[$1,$&,$$]/gc<CR>:set pcre<CR>gg0rZ`;
+    if (replay === "mapping") {
+      f.map("Q", command);
+      f.keys("Q");
+    } else {
+      Vim.getRegisterController().getRegister("a").setText(command);
+      f.keys("@a");
+    }
+    expect(f.pending.pending).toBe(true);
+    expect(f.cm.getValue()).toBe("head\nfoo foo\nbar\ntail");
+    await f.answer("a");
+    expect(f.cm.getValue()).toBe("Zead\n[foo,foo,$] [foo,foo,$]\nbar\ntail");
+    expect(Vim.getOption("pcre")).toBe(true);
+    expect(f.errors).toEqual([]);
+    expect(undoDepth(f.view.state)).toBe(1);
+    undo(f.view);
+    expect(f.cm.getValue()).toBe("head\nfoo foo\nbar\ntail");
+  },
+);
+
 it("records Ex prompt blur as cancellation before later Normal macro keys", async () => {
   const f = create();
   f.view.focus();

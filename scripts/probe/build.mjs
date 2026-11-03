@@ -3,6 +3,7 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertBundleBoundary } from "../build-boundaries.mjs";
+import { availableEngines } from "../engines/build.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 export const harnessId = "lindvimera-test-harness";
@@ -11,7 +12,11 @@ export async function buildProbe(outdir = join(root, ".test-runtime", "harness")
   await mkdir(outdir, { recursive: true });
   const result = await build({
     absWorkingDir: root,
-    entryPoints: ["test/probe/main.ts"],
+    entryPoints: [
+      availableEngines(root).includes("embedded")
+        ? "test/probe/main.ts"
+        : "test/probe/builtin-main.ts",
+    ],
     outfile: join(outdir, "main.js"),
     bundle: true,
     format: "cjs",
@@ -31,7 +36,7 @@ export async function buildProbe(outdir = join(root, ".test-runtime", "harness")
         id: harnessId,
         name: "Lindvimera test harness",
         version: "0.0.0",
-        minAppVersion: "1.14.4",
+        minAppVersion: "1.15.0",
         description: "Regression workbench for the isolated disposable test Vault only.",
         author: "Lindvimera tests",
         isDesktopOnly: true,

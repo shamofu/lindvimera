@@ -4,7 +4,7 @@ import {
   parseEx,
   unescapePattern,
   unescapeReplacement,
-} from "../../src/ex/parser";
+} from "../../src/input/ex-syntax";
 
 describe("bounded Ex syntax", () => {
   it.each([
@@ -23,6 +23,8 @@ describe("bounded Ex syntax", () => {
     ["noh", "nohlsearch"],
     ["nohlsearch", "nohlsearch"],
     ["42", "move"],
+    ["set nopcre", "set"],
+    ["set pcre", "set"],
   ])("resolves %s to %s", (input, name) => {
     expect(parseEx(input).name).toBe(name);
   });
@@ -59,14 +61,14 @@ describe("bounded Ex syntax", () => {
   });
 
   it.each([
-    "set pcre",
+    "set number",
     "map Q dd",
     "global/x/d",
     "normal dd",
     "write",
     "tabnext",
-    "/find/delete",
-    "?find?y",
+    "/find",
+    "?find",
     "1;2d",
     "1,d",
     "0d",
@@ -91,6 +93,24 @@ describe("bounded Ex syntax", () => {
   ])("rejects unsupported or malformed %s", (input) => {
     expect(() => parseEx(input)).toThrow();
   });
+});
+
+it("parses forward, backward and reused search addresses with offsets", () => {
+  expect(parseEx(String.raw`:/foo\/bar/+1,?end?-2d`).range).toEqual({
+    from: { base: { search: String.raw`foo\/bar`, delimiter: "/" }, offset: 1 },
+    to: { base: { search: "end", delimiter: "?" }, offset: -2 },
+  });
+  expect(parseEx("//y").range).toMatchObject({ from: { base: { search: "" } } });
+});
+
+it("defers Vim pattern validation to a pure supplied translator", () => {
+  expect(() => parseEx("s/(/x/", { pcre: false })).not.toThrow();
+  expect(() =>
+    parseEx(String.raw`s/\(/x/`, {
+      pcre: false,
+      translateVimPattern: (pattern) => pattern.replaceAll(String.raw`\(`, "("),
+    }),
+  ).toThrow();
 });
 
 describe("JavaScript substitution strings", () => {

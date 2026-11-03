@@ -1,4 +1,4 @@
-import { analyseKeyBindings } from "../input/policy";
+import { analyseKeyBindings } from "../input/analysis";
 import {
   checkedKeyBindings,
   type KeyBinding,
@@ -15,9 +15,11 @@ export const MODE_LABELS: Readonly<Record<VimMode, string>> = {
 };
 
 /** Structural mistakes block Apply; unsupported operations remain visible and saved. */
-export function checkedMappingDraft(value: unknown): KeyBinding[] {
+export function checkedMappingDraft(value: unknown, settings?: LindvimeraSettings): KeyBinding[] {
   const bindings = checkedKeyBindings(value);
-  const cycle = analyseKeyBindings(bindings).issues.find(({ reason }) => reason.includes("循環"));
+  const cycle = analyseKeyBindings(bindings, settings).issues.find(({ reason }) =>
+    reason.includes("循環"),
+  );
   if (cycle) throw new Error(cycle.reason);
   return bindings;
 }
@@ -54,7 +56,7 @@ export function renderMappingEditor(
   const validate = () => {
     let hardError = "";
     try {
-      checkedMappingDraft(draft);
+      checkedMappingDraft(draft, options.getSettings?.());
     } catch (reason) {
       hardError = reason instanceof Error ? reason.message : String(reason);
     }
