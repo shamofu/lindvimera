@@ -987,6 +987,132 @@ export async function runBuiltinProbe() {
       });
     }
     await delay(100);
+    await check("live-preview-decorations", async () => {
+      const lpDoc = [
+        "0123456789",
+        "ab<ins>cdefgh</ins>ij",
+        "abc**def**ghi",
+        "ab[[target|cdefgh]]ij",
+        "- ab<ins>cdef</ins>gh",
+        "foo <ins>bar</ins> baz",
+        "<ins>日本語テスト</ins> 末尾",
+        "0123456789abc",
+        "prefix <ins>abcdef</ins> suffix",
+      ].join("\n");
+      await setup(lpDoc, false);
+      await page.waitForFunction(
+        () => document.querySelectorAll(".workspace-leaf.mod-active .cm-html-embed").length >= 3,
+      );
+      await delay(250);
+
+      // j/k preserve visible body column 5 across <ins>, wikilink, list prefix -
+      await keys("gg05lj");
+      assert.deepEqual((await snapshot()).cursor, { line: 1, ch: 10 });
+      await keys("2j");
+      assert.deepEqual((await snapshot()).cursor, { line: 3, ch: 14 });
+      await keys("j");
+      assert.deepEqual((await snapshot()).cursor, { line: 4, ch: 12 });
+      await keys("3k");
+      assert.deepEqual((await snapshot()).cursor, { line: 1, ch: 10 });
+
+      // $j and $hj reset lastHPos
+      await keys("gg$j");
+      assert.deepEqual((await snapshot()).cursor, { line: 1, ch: 20 });
+      await keys("gg$hj");
+      assert.deepEqual((await snapshot()).cursor, { line: 1, ch: 19 });
+
+      // l entry into collapsed abc**def**ghi skips '**' and resists Obsidian _x snap!
+      await keys("gg2j02l");
+      await delay(100);
+      await keys("l");
+      assert.deepEqual((await snapshot()).cursor, { line: 2, ch: 5 });
+      await keys("l");
+      assert.deepEqual((await snapshot()).cursor, { line: 2, ch: 6 });
+      await keys("2h");
+      assert.deepEqual((await snapshot()).cursor, { line: 2, ch: 4 });
+
+      // Collapsed <ins>bar</ins> l entry + expanded h/l char-by-char editing
+      await keys("gg5j03l");
+      await delay(100);
+      await keys("l");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 9 });
+      await keys("l");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 10 });
+      await keys("2h");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 8 });
+
+      // w / b / W / ^ across collapsed <ins>
+      await keys("gg5j0");
+      await delay(100);
+      await keys("w");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 9 });
+      await keys("0");
+      await delay(100);
+      await keys("W");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 9 });
+      await keys("$b");
+      await delay(100);
+      await keys("b");
+      assert.deepEqual((await snapshot()).cursor, { line: 5, ch: 9 });
+
+      await keys("gg6j$");
+      await delay(100);
+      await keys("^");
+      assert.deepEqual((await snapshot()).cursor, { line: 6, ch: 5 });
+
+      // gj from line 7 col 9 ('9') onto line 8 collapsed <ins>abcdef</ins> lands inside text
+      await keys("gg7j09lgj");
+      {
+        const cur = (await snapshot()).cursor;
+        assert.equal(cur.line, 8);
+        assert.ok(cur.ch >= 12 && cur.ch <= 17, `gj into <ins>abcdef</ins> landed at ${cur.ch}`);
+      }
+
+      // Real Playwright locator click on 'd' inside line 8 <ins>abcdef</ins>
+      await keys("gg0");
+      await delay(150);
+      const rel = await page.evaluate(() => {
+        document.querySelectorAll(".notice-container .notice").forEach((n) => n.remove());
+        const embeds = [
+          ...document.querySelectorAll(".workspace-leaf.mod-active .cm-html-embed ins"),
+        ];
+        const target = embeds.find((el) => (el.textContent ?? "").includes("abcdef"));
+        if (!target) throw new Error("Target <ins>abcdef</ins> embed not found");
+        const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+        let textNode = null;
+        while ((textNode = walker.nextNode())) {
+          if ((textNode.nodeValue ?? "").includes("abcdef")) break;
+        }
+        const range = document.createRange();
+        range.setStart(textNode, 3);
+        range.setEnd(textNode, 4);
+        const charRect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+        const elRect = target.getBoundingClientRect();
+        return {
+          x: (charRect.left + charRect.right) / 2 - elRect.left,
+          y: (charRect.top + charRect.bottom) / 2 - elRect.top,
+        };
+      });
+      await page
+        .locator(".workspace-leaf.mod-active .cm-html-embed ins", { hasText: "abcdef" })
+        .first()
+        .click({ position: rel });
+      await page.waitForFunction(
+        () => __builtin115.leaf.view.editMode.cm.state.selection.main.head !== 0,
+        undefined,
+        { timeout: 3_000 },
+      );
+      assert.deepEqual((await snapshot()).cursor, { line: 8, ch: 15 });
+
+      // dw operator and Source mode keep raw source offsets
+      await keys("ggj0dw");
+      assert.ok((await snapshot()).text.split("\n")[1] === "<ins>cdefgh</ins>ij");
+
+      await setup(lpDoc, true);
+      await delay(100);
+      await keys("gg05lj");
+      assert.deepEqual((await snapshot()).cursor, { line: 1, ch: 5 });
+    });
     await check("renderer-errors", () => assert.deepEqual(rendererErrors, []));
     environment.afterHashes = await verifyRuntimeFiles(
       environment.candidateHashes,

@@ -234,91 +234,131 @@ export function wordSpans(text: string, bigWord = false, cache = sharedCache): r
   });
 }
 
-export function createWordProvider(cache = new WordBoundaryCache()): WordProvider {
-  const character: WordProvider["character"] = (document, cursor, direction) => {
-    // Linewise operators may use the position just after the final document line.
-    if (cursor.line < document.firstLine() || cursor.line > document.lastLine())
-      return { ...cursor };
-    const text = document.getLine(cursor.line);
-    const boundaries = cache.graphemes(text);
-    const index = lowerBound(boundaries, Math.max(0, Math.min(cursor.ch, text.length)));
-    const exact = boundaries[index] === cursor.ch;
-    let ch: number;
-    if (direction < 0) ch = boundaries[Math.max(0, index - 1)];
-    else if (direction > 0) {
-      ch = cursor.ch >= text.length ? cursor.ch + 1 : boundaries[exact ? index + 1 : index];
-    } else ch = boundaries[exact ? index : Math.max(0, index - 1)];
-    return { line: cursor.line, ch };
-  };
+function characterAt(
+  cache: WordBoundaryCache,
+  document: WordDocument,
+  cursor: WordPosition,
+  direction: -1 | 0 | 1,
+): WordPosition {
+  // Linewise operators may use the position just after the final document line.
+  if (cursor.line < document.firstLine() || cursor.line > document.lastLine()) return { ...cursor };
+  const text = document.getLine(cursor.line);
+  const boundaries = cache.graphemes(text);
+  const index = lowerBound(boundaries, Math.max(0, Math.min(cursor.ch, text.length)));
+  const exact = boundaries[index] === cursor.ch;
+  let ch: number;
+  if (direction < 0) ch = boundaries[Math.max(0, index - 1)];
+  else if (direction > 0) {
+    ch = cursor.ch >= text.length ? cursor.ch + 1 : boundaries[exact ? index + 1 : index];
+  } else ch = boundaries[exact ? index : Math.max(0, index - 1)];
+  return { line: cursor.line, ch };
+}
 
-  function find(
-    document: WordDocument,
-    cursor: WordPosition,
-    forward: boolean,
-    emptyLineIsWord: boolean,
-  ): FoundWord | null {
-    const direction = forward ? 1 : -1;
-    for (
-      let line = cursor.line;
-      line >= document.firstLine() && line <= document.lastLine();
-      line += direction
-    ) {
-      const text = document.getLine(line);
-      if (!text && emptyLineIsWord && line !== cursor.line) {
-        return { line, from: 0, to: 0, last: 0 };
+function findWordSpan(
+  document: WordDocument,
+  cursor: WordPosition,
+  forward: boolean,
+  emptyLineIsWord: boolean,
+  spansForLine: (text: string) => readonly WordSpan[],
+  cache: WordBoundaryCache,
+): FoundWord | null {
+  const direction = forward ? 1 : -1;
+  for (
+    let line = cursor.line;
+    line >= document.firstLine() && line <= document.lastLine();
+    line += direction
+  ) {
+    const text = document.getLine(line);
+    if (!text && emptyLineIsWord && line !== cursor.line) {
+      return { line, from: 0, to: 0, last: 0 };
+    }
+    const current = line === cursor.line;
+    const position = current
+      ? characterAt(cache, document, cursor, 0).ch
+      : forward
+        ? 0
+        : text.length;
+    const words = spansForLine(text);
+    if (forward) {
+      for (const word of words) {
+        if (word.to <= position) continue;
+        const start = Math.max(position, word.from);
+        if (current && start === position && position === word.last) continue;
+        return { ...word, from: start, line };
       }
-      const current = line === cursor.line;
-      const position = current ? character(document, cursor, 0).ch : forward ? 0 : text.length;
-      const words = cache.analyze(text).words;
-      if (forward) {
-        for (const word of words) {
-          if (word.to <= position) continue;
-          const start = Math.max(position, word.from);
-          if (current && start === position && position === word.last) continue;
-          return { ...word, from: start, line };
-        }
-      } else {
-        for (let index = words.length - 1; index >= 0; index--) {
-          const word = words[index];
-          if (word.from > position) continue;
-          if (current && position === word.from) continue;
-          return { ...word, to: Math.min(position, word.last), line };
-        }
+    } else {
+      for (let index = words.length - 1; index >= 0; index--) {
+        const word = words[index];
+        if (word.from > position) continue;
+        if (current && position === word.from) continue;
+        return { ...word, to: Math.min(position, word.last), line };
       }
     }
-    return null;
   }
+  return null;
+}
+
+function moveBySpans(
+  document: WordDocument,
+  cursor: WordPosition,
+  args: { repeat: number; forward?: boolean; wordEnd?: boolean },
+  spansForLine: (text: string) => readonly WordSpan[],
+  cache: WordBoundaryCache,
+): WordPosition {
+  const forward = !!args.forward;
+  const wordEnd = !!args.wordEnd;
+  const origin = { ...cursor };
+  const repeat = Math.max(1, args.repeat) + Number(forward !== wordEnd);
+  const words: FoundWord[] = [];
+  for (let index = 0; index < repeat; index++) {
+    const word = findWordSpan(
+      document,
+      cursor,
+      forward,
+      !(forward && wordEnd),
+      spansForLine,
+      cache,
+    );
+    if (!word) {
+      const line = forward ? document.lastLine() : document.firstLine();
+      const end = forward ? document.getLine(line).length : 0;
+      words.push({ line, from: end, to: end, last: end });
+      break;
+    }
+    words.push(word);
+    cursor = { line: word.line, ch: forward ? word.last : word.from };
+  }
+  const shortCircuit = words.length !== repeat;
+  const first = words[0];
+  let last = words.at(-1)!;
+  if (
+    !shortCircuit &&
+    ((forward && !wordEnd && (first.from !== origin.ch || first.line !== origin.line)) ||
+      (!forward && wordEnd && (first.to !== origin.ch || first.line !== origin.line)))
+  ) {
+    last = words.at(-2)!;
+  }
+  return { line: last.line, ch: wordEnd ? (forward ? last.last : last.to) : last.from };
+}
+
+/** Whitespace-delimited WORD movement (`W`/`B`/`E`/`gE`) across any WordDocument. */
+export function moveBigWord(
+  document: WordDocument,
+  cursor: WordPosition,
+  args: { repeat: number; forward?: boolean; wordEnd?: boolean },
+  cache: WordBoundaryCache = sharedCache,
+): WordPosition {
+  return moveBySpans(document, cursor, args, (text) => wordSpans(text, true, cache), cache);
+}
+
+export function createWordProvider(cache = new WordBoundaryCache()): WordProvider {
+  const character: WordProvider["character"] = (document, cursor, direction) =>
+    characterAt(cache, document, cursor, direction);
 
   return {
     character,
     move(document, cursor, args) {
-      const forward = !!args.forward;
-      const wordEnd = !!args.wordEnd;
-      const origin = { ...cursor };
-      const repeat = Math.max(1, args.repeat) + Number(forward !== wordEnd);
-      const words: FoundWord[] = [];
-      for (let index = 0; index < repeat; index++) {
-        const word = find(document, cursor, forward, !(forward && wordEnd));
-        if (!word) {
-          const line = forward ? document.lastLine() : document.firstLine();
-          const end = forward ? document.getLine(line).length : 0;
-          words.push({ line, from: end, to: end, last: end });
-          break;
-        }
-        words.push(word);
-        cursor = { line: word.line, ch: forward ? word.last : word.from };
-      }
-      const shortCircuit = words.length !== repeat;
-      const first = words[0];
-      let last = words.at(-1)!;
-      if (
-        !shortCircuit &&
-        ((forward && !wordEnd && (first.from !== origin.ch || first.line !== origin.line)) ||
-          (!forward && wordEnd && (first.to !== origin.ch || first.line !== origin.line)))
-      ) {
-        last = words.at(-2)!;
-      }
-      return { line: last.line, ch: wordEnd ? (forward ? last.last : last.to) : last.from };
+      return moveBySpans(document, cursor, args, (text) => cache.analyze(text).words, cache);
     },
     expand(document, cursor, options) {
       return expandWordObject(document, cursor, options, cache);

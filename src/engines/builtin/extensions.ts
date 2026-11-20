@@ -20,8 +20,18 @@ import {
   markdownContentStart,
   markdownOpenLine,
 } from "../../markdown/editing";
+import {
+  isLivePreviewView,
+  livePreviewCharacter,
+  livePreviewContentStart,
+  livePreviewWord,
+  resolveLiveDisplayVerticalMotion,
+  resolveLiveVerticalMotion,
+  type DisplayVerticalGoalState,
+  type VerticalGoalState,
+} from "../../markdown/live-preview";
 import { findSurround, surroundText } from "../../markdown/surround";
-import { createWordProvider, WordBoundaryCache } from "../../word";
+import { createWordProvider, moveBigWord, WordBoundaryCache } from "../../word";
 import { createSentenceProvider } from "../../word/sentence";
 import type { BackendHost } from "../types";
 import type {
@@ -69,6 +79,7 @@ export function installDefinitions(vim: NativeVim): void {
     "surroundTarget",
     "contentStart",
     "contentVertical",
+    "displayVertical",
   ] as const) {
     vim.defineMotion(prefix + name, (cm, head, args, state, input) =>
       sessions.get(cm)?.motion(name, head, args, state.visualMode === true, input),
@@ -105,13 +116,16 @@ export class NativeExtensions {
   private nativeOpenAbove = false;
   private disposed = false;
   private foldGeneration = 0;
-  private verticalGoal?: number;
-  private verticalPosition?: Position;
+  private verticalState: VerticalGoalState = {};
+  private displayState: DisplayVerticalGoalState = {};
+  private exactTarget?: Position;
   private revision?: object;
   private editingIndex?: ReturnType<typeof buildMarkdownEditingIndex>;
   private markdownIndex?: ReturnType<typeof indexMarkdown>;
   private originalSelections?: NativeCM["setSelections"];
   private ownedSelections?: NativeCM["setSelections"];
+  private originalSetCursor?: NativeCM["setCursor"];
+  private ownedSetCursor?: NativeCM["setCursor"];
 
   private invalidateIndexes(): void {
     const revision = this.cm.cm6.state.doc;
@@ -157,6 +171,27 @@ export class NativeExtensions {
       };
       cm.setSelections = this.ownedSelections;
     }
+    const previousCursor = cm.setCursor;
+    this.originalSetCursor = previousCursor;
+    this.ownedSetCursor = function (this: NativeCM, position: Position | number, ch?: number) {
+      const session = sessions.get(this);
+      const target = typeof position === "number" ? { line: position, ch: ch ?? 0 } : position;
+      session?.consumeExactTarget(target.line, target.ch);
+      return previousCursor.call(this, position, ch);
+    };
+    cm.setCursor = this.ownedSetCursor;
+  }
+
+  private consumeExactTarget(line: number, ch: number): void {
+    if (!this.exactTarget || this.exactTarget.line !== line || this.exactTarget.ch !== ch) return;
+    this.exactTarget = undefined;
+    const offset = Math.max(
+      0,
+      Math.min(this.cm.cm6.state.doc.length, this.cm.indexFromPos({ line, ch })),
+    );
+    // Pre-dispatching the exact CM6 cursor expands collapsed decorations before
+    // Obsidian's native CodeMirrorAdapter.setCursor runs its `_x` snap adjustment.
+    this.cm.cm6.dispatch?.({ selection: { anchor: offset } });
   }
 
   normalizeSelections(ranges: NativeRange[]): NativeRange[] {
@@ -225,6 +260,8 @@ export class NativeExtensions {
       args: Partial<NativeArgs> = {},
       context = "normal",
     ) => commands.push({ keys, type: "action", action: prefix + name, actionArgs: args, context });
+    const body = !this.cm.cm6.dom.closest(".cm-table-widget");
+    const livePreview = body && !state.visualBlock && isLivePreviewView(this.cm.cm6);
     // The host still owns mode transitions, native operators and their replay state.
     for (const [keys, forward, wordEnd] of [
       ["w", true, false],
@@ -233,6 +270,15 @@ export class NativeExtensions {
       ["ge", false, true],
     ] as const)
       motion(keys, "word", { forward, wordEnd, inclusive: wordEnd });
+    if (livePreview)
+      for (const [keys, forward, wordEnd] of [
+        ["W", true, false],
+        ["B", false, false],
+        ["E", true, true],
+        ["gE", false, true],
+      ] as const)
+        for (const context of ["normal", "visual"])
+          motion(keys, "word", { forward, wordEnd, inclusive: wordEnd, bigWord: true }, context);
     for (const [keys, forward] of [
       ["h", false],
       ["l", true],
@@ -293,7 +339,6 @@ export class NativeExtensions {
               { kind, textObjectInner: inner },
               context,
             );
-    const body = !this.cm.cm6.dom.closest(".cm-table-widget");
     // Smart Lists is a host setting and remains effective independently of our
     // optional content-start/open-above Markdown extensions.
     if (body && this.vim.enterInsertMode)
@@ -312,16 +357,19 @@ export class NativeExtensions {
         action("<Tab>", "tableMove", { forward: true }, context);
         action("<S-Tab>", "tableMove", { forward: false }, context);
       }
-    if (
-      body &&
-      this.cm.findPosV &&
-      this.cm.cm6.dom.closest(".markdown-source-view")?.classList.contains("is-live-preview")
-    )
+    if (livePreview && this.cm.findPosV) {
       for (const forward of [false, true])
         for (const context of ["normal", "visual"])
           motion(forward ? "j" : "k", "contentVertical", { forward, linewise: true }, context);
+      for (const [keys, forward] of [
+        ["gj", true],
+        ["gk", false],
+      ] as const)
+        for (const context of ["normal", "visual"])
+          motion(keys, "displayVertical", { forward }, context);
+    }
+    if (body && (settings.markdownEditing || livePreview)) motion("^", "contentStart");
     if (settings.markdownEditing && body) {
-      motion("^", "contentStart");
       if (this.vim.enterInsertMode) {
         commands.push({
           keys: "I",
@@ -409,6 +457,7 @@ export class NativeExtensions {
   }
 
   afterCommand(): void {
+    this.exactTarget = undefined;
     const state = this.cm.state.vim;
     if (this.pending && state) state.expectLiteralNext = true;
     // Native CM6 reflects exclusive selections back into inclusive Vim heads
@@ -429,23 +478,67 @@ export class NativeExtensions {
   ): Position | [Position, Position] | undefined | null {
     if (!this.active()) return;
     const cm = this.cm;
+    const live = !input.operator && !cm.state.vim?.visualBlock && isLivePreviewView(cm.cm6);
     if (name === "character") {
+      this.verticalState = {};
+      this.displayState = {};
+      if (live) {
+        const target = livePreviewCharacter(
+          cm.cm6,
+          cm,
+          head,
+          !!args.forward,
+          args.repeat,
+          this.words,
+        );
+        if (cm.state.vim?.lastHPos === Infinity) cm.state.vim.lastHPos = target.ch;
+        this.exactTarget = target;
+        return target;
+      }
       let target = head;
       for (let count = 0; count < args.repeat; count++)
         target = this.words.character(cm, target, args.forward ? 1 : -1);
       return target;
     }
     if (name === "word") {
+      this.verticalState = {};
+      this.displayState = {};
+      if (live) {
+        const target = livePreviewWord(
+          cm.cm6,
+          cm,
+          head,
+          {
+            repeat: args.repeat,
+            forward: args.forward,
+            wordEnd: args.wordEnd,
+            bigWord: args.bigWord,
+          },
+          this.words,
+          this.cache,
+        );
+        if (cm.state.vim?.lastHPos === Infinity) cm.state.vim.lastHPos = target.ch;
+        this.exactTarget = target;
+        return target;
+      }
       const changeWord =
+        !args.bigWord &&
         input.operator === "change" &&
         args.forward &&
         !args.wordEnd &&
         /\S/u.test(cm.getLine(head.line).slice(head.ch, head.ch + 1));
-      const target = this.words.move(cm, head, {
-        repeat: args.repeat,
-        forward: args.forward,
-        wordEnd: changeWord || args.wordEnd,
-      });
+      const target = args.bigWord
+        ? moveBigWord(
+            cm,
+            head,
+            { repeat: args.repeat, forward: args.forward, wordEnd: args.wordEnd },
+            this.cache,
+          )
+        : this.words.move(cm, head, {
+            repeat: args.repeat,
+            forward: args.forward,
+            wordEnd: changeWord || args.wordEnd,
+          });
       if (input.operator && (args.wordEnd || changeWord)) {
         args.inclusive = false;
         return this.words.character(cm, target, 1);
@@ -485,45 +578,71 @@ export class NativeExtensions {
     const text = cm.getValue();
     const offset = cm.indexFromPos(head);
     if (name === "contentStart") {
-      const content = markdownContentStart(this.editing(), offset);
+      this.verticalState = {};
+      this.displayState = {};
+      const content = this.host.settings().markdownEditing
+        ? markdownContentStart(this.editing(), offset)
+        : undefined;
+      let position: Position;
       if (content !== undefined) {
-        const position = cm.posFromIndex(content);
-        return position.ch === cm.getLine(position.line).length ? undefined : position;
+        position = cm.posFromIndex(content);
+      } else {
+        const line = cm.getLine(head.line);
+        const first = line.search(/\S/u);
+        position = { line: head.line, ch: first === -1 ? line.length : first };
       }
-      return { line: head.line, ch: Math.max(0, cm.getLine(head.line).search(/\S/u)) };
+      if (live) {
+        position = {
+          line: position.line,
+          ch: livePreviewContentStart(cm.cm6, position.line, position.ch),
+        };
+        if (cm.state.vim?.lastHPos === Infinity) cm.state.vim.lastHPos = position.ch;
+      }
+      if (position.ch === cm.getLine(position.line).length) return undefined;
+      if (live) this.exactTarget = position;
+      return position;
     }
     if (name === "contentVertical") {
-      const index = this.editing();
-      const contentOffset = (position: Position) => {
-        const lineStart = cm.indexFromPos({ line: position.line, ch: 0 });
-        return (markdownContentStart(index, cm.indexFromPos(position)) ?? lineStart) - lineStart;
-      };
-      if (
-        this.verticalGoal === undefined ||
-        this.verticalPosition?.line !== head.line ||
-        this.verticalPosition?.ch !== head.ch
-      )
-        this.verticalGoal = Math.max(0, head.ch - contentOffset(head));
-      const amount = (args.forward ? 1 : -1) * args.repeat;
-      const visible = cm.findPosV!(head, amount, "line", cm.state.vim!.lastHSPos);
-      if (visible.focusBefore) {
-        visible.focusBefore();
-        return head;
-      }
-      if (visible.hitSide && visible.line === head.line && visible.ch === head.ch) return head;
-      const physical = Math.max(cm.firstLine(), Math.min(cm.lastLine(), head.line + amount));
-      const line = args.forward
-        ? Math.max(physical, visible.line)
-        : Math.min(physical, visible.line);
-      const ch = Math.min(
-        Math.max(0, cm.getLine(line).length - 1),
-        contentOffset({ line, ch: 0 }) + this.verticalGoal,
-      );
-      const position = { line, ch };
-      this.verticalPosition = position;
-      cm.state.vim!.lastHPos = ch;
-      cm.state.vim!.lastHSPos = cm.charCoords?.(position, "div").left;
-      return position;
+      this.displayState = {};
+      const result = resolveLiveVerticalMotion({
+        view: cm.cm6,
+        doc: cm,
+        index: this.editing(),
+        indexFromPos: (position) => cm.indexFromPos(position),
+        head,
+        forward: !!args.forward,
+        repeat: args.repeat,
+        state: this.verticalState,
+        findPosV: cm.findPosV
+          ? (from, amount, unit, horizontal) => cm.findPosV!(from, amount, unit, horizontal)
+          : undefined,
+        charCoords: cm.charCoords ? (position, mode) => cm.charCoords!(position, mode) : undefined,
+        lastHPos: cm.state.vim?.lastHPos,
+        lastHSPos: cm.state.vim?.lastHSPos,
+      });
+      cm.state.vim!.lastHPos = result.lastHPos;
+      if (result.lastHSPos !== undefined) cm.state.vim!.lastHSPos = result.lastHSPos;
+      this.exactTarget = result.position;
+      return result.position;
+    }
+    if (name === "displayVertical") {
+      this.verticalState = {};
+      if (!cm.findPosV || !cm.charCoords) return undefined;
+      const result = resolveLiveDisplayVerticalMotion({
+        view: cm.cm6,
+        doc: cm,
+        head,
+        forward: !!args.forward,
+        repeat: args.repeat,
+        state: this.displayState,
+        findPosV: (from, amount, unit, horizontal) => cm.findPosV!(from, amount, unit, horizontal),
+        charCoords: (position, mode) => cm.charCoords!(position, mode),
+        lastHSPos: cm.state.vim?.lastHSPos,
+      });
+      cm.state.vim!.lastHPos = result.lastHPos;
+      if (result.lastHSPos !== undefined) cm.state.vim!.lastHSPos = result.lastHSPos;
+      this.exactTarget = result.position;
+      return result.position;
     }
     if (name === "surroundTarget") {
       const range = findSurround(text, offset, args.selectedCharacter ?? "", args.repeat);
@@ -804,6 +923,7 @@ export class NativeExtensions {
   }
 
   cancel(): void {
+    this.exactTarget = undefined;
     if (this.pending && this.cm.state.vim) {
       this.cm.state.vim.lastEditInputState = this.pending.previousEdit;
       this.cm.state.vim.lastEditActionCommand = this.pending.previousAction;
@@ -819,6 +939,8 @@ export class NativeExtensions {
     this.cache.clear();
     if (this.cm.setSelections === this.ownedSelections)
       this.cm.setSelections = this.originalSelections;
+    if (this.cm.setCursor === this.ownedSetCursor && this.originalSetCursor)
+      this.cm.setCursor = this.originalSetCursor;
     sessions.delete(this.cm);
   }
 }

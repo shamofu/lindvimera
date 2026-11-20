@@ -107,6 +107,9 @@ function extensionEnabled(name: string, settings: LindvimeraSettings): boolean {
   // ^ remains a supported builtin when its recorded motion falls back after a setting change.
   if (name === "lindvimeraContentStart") return true;
   if (name === "lindvimeraContentVertical") return true;
+  if (name === "lindvimeraDisplayVertical") return true;
+  if (name === "lindvimeraLiveCharacter") return true;
+  if (name === "lindvimeraLiveWord") return true;
   if (name.startsWith("lindvimeraFold")) return settings.folding;
   if (name.startsWith("lindvimeraSurround")) return settings.surround;
   if (name.startsWith("lindvimeraObject")) return settings.textObjects;

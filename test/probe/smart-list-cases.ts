@@ -93,11 +93,13 @@ export async function runSmartListCases(options: {
           view.state.doc.toString() === expected,
           `Indent differs from native exec (Source=${source}, Smart=${smart}): ${JSON.stringify(view.state.doc.toString())} vs ${JSON.stringify(expected)}`,
         );
-        physical(view, "u");
-        assert(
-          view.state.doc.toString() === initial,
-          "Native indentation was not one undo operation.",
-        );
+        if (expected !== initial) {
+          physical(view, "u");
+          assert(
+            view.state.doc.toString() === initial,
+            "Native indentation was not one undo operation.",
+          );
+        }
       }
       const view = await seed("- first");
       physical(view, "A<CR>X<Esc>.");

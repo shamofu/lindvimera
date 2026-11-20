@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { EditorState, RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { createBackend } from "../src/engines/builtin";
 import { analyseKeyBindings } from "../src/engines/builtin/policy";
 import {
@@ -63,8 +63,8 @@ function nativeCM(view: EditorView): NativeCM {
     firstLine: () => 0,
     lastLine: () => view.state.doc.lines - 1,
     getCursor: () => cursor,
-    setCursor: (value) => {
-      cursor = value;
+    setCursor: (value, ch) => {
+      cursor = typeof value === "number" ? { line: value, ch: ch ?? 0 } : value;
     },
     setSelections: vi.fn(),
     indexFromPos: (value) => view.state.doc.line(value.line + 1).from + value.ch,
@@ -86,6 +86,10 @@ function nativeCM(view: EditorView): NativeCM {
 }
 
 const cleanup: (() => void)[] = [];
+beforeAll(() => {
+  Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+});
 afterEach(() => {
   for (const dispose of cleanup.splice(0).reverse()) dispose();
   delete (window as NativeWindow).CodeMirrorAdapter;
@@ -287,5 +291,270 @@ describe("builtin ownership boundary", () => {
     test.backend.applySettings();
     test.vim.handleKey(test.cm, "Q");
     expect(mapped).toBe(false);
+  });
+
+  it("handles Live Preview decorations, gj/gk, W/B/E/gE, exactTarget _x-snap guard, and cleanup", async () => {
+    const native = fakeNative();
+    (window as NativeWindow).CodeMirrorAdapter = { Vim: native.vim };
+    let extension: Extension = [];
+    const settings: LindvimeraSettings = {
+      ...DEFAULT_SETTINGS,
+      keyBindings: [],
+      escapeSequences: [],
+    };
+    const backend = createBackend({
+      app: {} as BackendHost["app"],
+      settings: () => settings,
+      wordSegmenter: () => budouxSegmenter,
+      isActive: () => true,
+      reportMode: vi.fn(),
+      reportError: vi.fn(),
+      registerEditorExtension: (value) => {
+        extension = value;
+      },
+    });
+    cleanup.push(() => backend.dispose());
+
+    class InsWidget extends WidgetType {
+      toDOM(): HTMLElement {
+        const el = document.createElement("span");
+        el.className = "cm-html-embed";
+        el.innerHTML = "<ins>def</ins>";
+        return el;
+      }
+    }
+
+    const decoField = StateField.define<DecorationSet>({
+      create: (state) => buildDecos(state),
+      update: (v, tr) => (tr.docChanged || tr.selection ? buildDecos(tr.state) : v),
+      provide: (f) => EditorView.decorations.from(f),
+    });
+    function buildDecos(state: EditorState): DecorationSet {
+      const builder = new RangeSetBuilder<Decoration>();
+      const head = state.selection.main.head;
+      const line0 = state.doc.line(1);
+      // Line 0: "abc**def**ghi" -> collapse "**" unless cursor is inside [3, 10)
+      if (!(head >= 3 && head < 10)) {
+        builder.add(3, 5, Decoration.replace({}));
+        builder.add(8, 10, Decoration.replace({}));
+      }
+      // Line 1: "<ins>def</ins> xyz" -> collapse unless cursor is inside [l1, l1+14)
+      const line1 = state.doc.line(2);
+      if (!(head >= line1.from && head < line1.from + 14)) {
+        builder.add(line1.from, line1.from + 14, Decoration.replace({ widget: new InsWidget() }));
+      }
+      void line0;
+      return builder.finish();
+    }
+
+    const container = document.createElement("div");
+    container.className = "markdown-source-view is-live-preview";
+    document.body.appendChild(container);
+    cleanup.push(() => container.remove());
+
+    const view = new EditorView({
+      parent: container,
+      state: EditorState.create({
+        doc: "abc**def**ghi\n<ins>def</ins> xyz01",
+        extensions: [decoField, extension],
+      }),
+    });
+    cleanup.push(() => view.destroy());
+
+    let cursor = { line: 0, ch: 2 };
+    let sawPreDispatched = false;
+    const rawSetCursor = vi.fn((pos: { line: number; ch: number } | number, ch?: number) => {
+      const target = typeof pos === "number" ? { line: pos, ch: ch ?? 0 } : pos;
+      // Simulate Obsidian CodeMirrorAdapter._x: snaps ch 5 back to opening '*' (ch 3)
+      // unless CM6 selection was already dispatched to offset 5 before setCursor runs!
+      if (view.state.selection.main.head === cm.indexFromPos(target)) {
+        sawPreDispatched = true;
+        cursor = target;
+      } else {
+        cursor = target.ch === 5 ? { line: target.line, ch: 3 } : target;
+      }
+    });
+    const cm: NativeCM = {
+      cm6: view,
+      state: {
+        vim: {
+          inputState: { keyBuffer: [], getRepeat: () => 1 },
+          sel: { anchor: cursor, head: cursor },
+        },
+      },
+      getValue: () => view.state.doc.toString(),
+      getLine: (line) => view.state.doc.line(line + 1).text,
+      firstLine: () => 0,
+      lastLine: () => view.state.doc.lines - 1,
+      getCursor: () => cursor,
+      setCursor: rawSetCursor,
+      setSelections: vi.fn(),
+      findPosV: (head, amount) => ({
+        line: Math.max(0, Math.min(view.state.doc.lines - 1, head.line + amount)),
+        ch: head.ch,
+      }),
+      charCoords: (pos) => ({ left: pos.ch * 8 }),
+      indexFromPos: (value) => view.state.doc.line(value.line + 1).from + value.ch,
+      posFromIndex: (value) => {
+        const line = view.state.doc.lineAt(value);
+        return { line: line.number - 1, ch: value - line.from };
+      },
+      replaceRange: vi.fn(),
+      operation: (action) => action(),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+    (view as EditorView & { cm: NativeCM }).cm = cm;
+    await Promise.resolve();
+
+    // commands() exposes j/k, gj/gk, W/B/E/gE, ^ in Live Preview Normal mode
+    let captured: NativeCommand[] = [];
+    native.findKey.mockImplementation(() => {
+      captured = [...native.commands];
+      return () => true;
+    });
+    native.vim.handleKey(cm, "l");
+    expect(
+      captured.some((c) => c.keys === "gj" && c.motion === "lindvimera115_displayVertical"),
+    ).toBe(true);
+    expect(captured.some((c) => c.keys === "W" && c.motion === "lindvimera115_word")).toBe(true);
+    expect(captured.some((c) => c.keys === "^" && c.motion === "lindvimera115_contentStart")).toBe(
+      true,
+    );
+
+    const charMotion = native.motions.get("lindvimera115_character")!;
+    const wordMotion = native.motions.get("lindvimera115_word")!;
+    const startMotion = native.motions.get("lindvimera115_contentStart")!;
+    const vertMotion = native.motions.get("lindvimera115_contentVertical")!;
+    const dispMotion = native.motions.get("lindvimera115_displayVertical")!;
+
+    // Normal 'l' from ch 2 ('c') skips collapsed '**' to ch 5 ('d') and avoids _x snap!
+    const lTarget = charMotion(
+      cm,
+      { line: 0, ch: 2 },
+      { repeat: 1, forward: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(lTarget).toEqual({ line: 0, ch: 5 });
+    cm.setCursor(lTarget);
+    expect(sawPreDispatched).toBe(true);
+    expect(cm.getCursor()).toEqual({ line: 0, ch: 5 });
+
+    // Once expanded inside [3, 10), 'h' steps 1 char into closing '*' of '**'
+    const hExpanded = charMotion(
+      cm,
+      { line: 0, ch: 5 },
+      { repeat: 1, forward: false },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(hExpanded).toEqual({ line: 0, ch: 4 });
+
+    // Back at ch 0 -> '^' on line 1 (<ins>def</ins>) skips '<ins>' -> ch 5
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(
+      startMotion(cm, { line: 1, ch: 0 }, { repeat: 1 }, cm.state.vim, cm.state.vim!.inputState),
+    ).toEqual({ line: 1, ch: 5 });
+
+    // '$' (lastHPos = Infinity) -> 'h' -> 'j' resets lastHPos (does not jump to last char of line 1!)
+    cm.state.vim!.lastHPos = Infinity;
+    const afterH = charMotion(
+      cm,
+      { line: 0, ch: 12 },
+      { repeat: 1, forward: false },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(afterH).toEqual({ line: 0, ch: 11 });
+    expect(cm.state.vim!.lastHPos).toBe(11);
+    const jFromH = vertMotion(
+      cm,
+      afterH,
+      { repeat: 1, forward: true, linewise: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(jFromH).toEqual({ line: 1, ch: 18 });
+    cm.state.vim!.lastHPos = Infinity;
+    const afterW = wordMotion(
+      cm,
+      { line: 0, ch: 0 },
+      { repeat: 1, forward: true, bigWord: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(cm.state.vim!.lastHPos).toBe(afterW.ch);
+
+    // Consecutive j -> j preserves goal across short/collapsed lines
+    const firstJ = vertMotion(
+      cm,
+      { line: 0, ch: 2 },
+      { repeat: 1, forward: true, linewise: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(firstJ).toEqual({ line: 1, ch: 7 }); // 'f' in <ins>def</ins> (col 2)
+    const backK = vertMotion(
+      cm,
+      firstJ,
+      { repeat: 1, forward: false, linewise: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(backK).toEqual({ line: 0, ch: 2 });
+
+    // displayVertical (gj) lands inside .cm-html-embed at the visual X column
+    view.contentDOM.getBoundingClientRect = () => new DOMRect(100, 0, 400, 100);
+    view.coordsAtPos = (offset) => new DOMRect(100, offset >= 14 ? 20 : 0, 1, 16);
+    const embedEl = view.contentDOM.querySelector(".cm-html-embed") as HTMLElement;
+    embedEl.getBoundingClientRect = () => new DOMRect(100, 20, 30, 16);
+    const origCreateRange = document.createRange.bind(document);
+    const origCreateRangeProp = document.createRange;
+    document.createRange = () => {
+      const range = origCreateRange();
+      let startOffset = 0;
+      const origSetStart = range.setStart.bind(range);
+      range.setStart = (node, offset) => {
+        startOffset = offset;
+        origSetStart(node, offset);
+      };
+      range.getClientRects = () =>
+        [new DOMRect(100 + startOffset * 10, 20, 10, 16)] as unknown as DOMRectList;
+      return range;
+    };
+    cleanup.push(() => {
+      document.createRange = origCreateRangeProp;
+    });
+    const gjRes = dispMotion(
+      cm,
+      { line: 0, ch: 1 },
+      { repeat: 1, forward: true },
+      cm.state.vim,
+      cm.state.vim!.inputState,
+    );
+    expect(gjRes).toEqual({ line: 1, ch: 6 });
+
+    // operatorPending, visualBlock, and Source mode bypass Live Preview adjustment
+    expect(
+      charMotion(cm, { line: 0, ch: 2 }, { repeat: 1, forward: true }, cm.state.vim, {
+        operator: "delete",
+      }),
+    ).toEqual({ line: 0, ch: 3 });
+
+    cm.state.vim!.visualBlock = true;
+    expect(
+      charMotion(cm, { line: 0, ch: 2 }, { repeat: 1, forward: true }, cm.state.vim, {}),
+    ).toEqual({ line: 0, ch: 3 });
+    cm.state.vim!.visualBlock = false;
+
+    container.classList.remove("is-live-preview");
+    expect(
+      charMotion(cm, { line: 0, ch: 2 }, { repeat: 1, forward: true }, cm.state.vim, {}),
+    ).toEqual({ line: 0, ch: 3 });
+
+    // dispose() restores original cm.setCursor
+    backend.dispose();
+    expect(cm.setCursor).toBe(rawSetCursor);
   });
 });

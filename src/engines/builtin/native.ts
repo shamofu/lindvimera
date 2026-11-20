@@ -46,10 +46,11 @@ export interface NativeState {
 }
 export interface NativeCM extends WordDocument {
   cm6: EditorView;
+  curOp?: unknown;
   state: { vim?: NativeState };
   getValue(): string;
   getCursor(which?: string): Position;
-  setCursor(position: Position): void;
+  setCursor: (position: Position | number, ch?: number) => void;
   setSelections?: (ranges: NativeRange[], primary?: number) => void;
   findPosV?(
     head: Position,

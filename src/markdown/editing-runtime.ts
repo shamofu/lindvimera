@@ -1,11 +1,22 @@
 import { Vim } from "@replit/codemirror-vim";
+import type { EditorView } from "@codemirror/view";
 import type { ActionArgs, CodeMirrorV, Pos, vimState, MotionFn } from "@replit/codemirror-vim-core";
+import { createWordProvider, WordBoundaryCache, type WordProvider } from "../word";
 import {
   buildMarkdownEditingIndex,
   markdownContentStart,
   markdownOpenLine,
   type MarkdownEditingIndex,
 } from "./editing";
+import {
+  livePreviewCharacter,
+  livePreviewContentStart,
+  livePreviewWord,
+  resolveLiveDisplayVerticalMotion,
+  resolveLiveVerticalMotion,
+  type DisplayVerticalGoalState,
+  type VerticalGoalState,
+} from "./live-preview";
 
 interface InsertAPI {
   enterInsert(head?: Pos): void;
@@ -26,9 +37,13 @@ export interface MarkdownEditingHost {
   indent(more: boolean): boolean;
 }
 type EditingMirror = Omit<CodeMirrorV, "cm6" | "getEditingView" | "state"> & {
-  cm6?: { state: { doc: object } };
-  getEditingView?: () => { state: { doc: object } };
-  state: { lindvimeraTarget?: ActionDelegate };
+  cm6?: EditorView;
+  getEditingView?: () => EditorView;
+  state: {
+    lindvimeraTarget?: ActionDelegate;
+    wordBoundaryProvider?: WordProvider;
+    vim?: vimState;
+  };
 };
 interface Configuration {
   enabled: boolean;
@@ -38,12 +53,14 @@ interface Configuration {
   text?: string;
   index?: MarkdownEditingIndex;
   host?: MarkdownEditingHost;
-  goal?: number;
-  goalHead?: Pos;
+  verticalState: VerticalGoalState;
+  displayState: DisplayVerticalGoalState;
   restore(): void;
 }
 
 const configurations = new WeakMap<object, Configuration>();
+const fallbackCache = new WordBoundaryCache(64, 32_768, true);
+const fallbackWords = createWordProvider(fallbackCache);
 
 function body(cm: EditingMirror): boolean {
   return !!cm.cm6 && cm.getEditingView?.() === cm.cm6;
@@ -119,8 +136,11 @@ export function configureMarkdownEditing(
   if (current) {
     current.enabled = enabled;
     current.host = host;
-    current.goal = undefined;
-    current.goalHead = undefined;
+    current.verticalState.goal = undefined;
+    current.verticalState.goalHead = undefined;
+    current.displayState.goalColumn = undefined;
+    current.displayState.goalCenterBias = undefined;
+    current.displayState.goalHead = undefined;
     return;
   }
   const previous = cm.state.lindvimeraTarget;
@@ -128,8 +148,11 @@ export function configureMarkdownEditing(
     ...previous,
     action(name, args, vim, api) {
       const configuration = configurations.get(cm)!;
-      configuration.goal = undefined;
-      configuration.goalHead = undefined;
+      configuration.verticalState.goal = undefined;
+      configuration.verticalState.goalHead = undefined;
+      configuration.displayState.goalColumn = undefined;
+      configuration.displayState.goalCenterBias = undefined;
+      configuration.displayState.goalHead = undefined;
       return (
         handleAction(cm, name, args, vim, api) || previous?.action?.(name, args, vim, api) || false
       );
@@ -137,8 +160,14 @@ export function configureMarkdownEditing(
     evaluateInput(input, api) {
       const configuration = configurations.get(cm)!;
       if (input.motion !== "lindvimeraContentVertical") {
-        configuration.goal = input.motion === "moveToEol" && !input.operator ? Infinity : undefined;
-        configuration.goalHead = undefined;
+        configuration.verticalState.goal =
+          input.motion === "moveToEol" && !input.operator ? Infinity : undefined;
+        configuration.verticalState.goalHead = undefined;
+      }
+      if (input.motion !== "lindvimeraDisplayVertical") {
+        configuration.displayState.goalColumn = undefined;
+        configuration.displayState.goalCenterBias = undefined;
+        configuration.displayState.goalHead = undefined;
       }
       return previous?.evaluateInput?.(input, api) ?? false;
     },
@@ -164,10 +193,12 @@ export function configureMarkdownEditing(
     host,
     previous,
     delegate,
+    verticalState: {},
+    displayState: {},
     restore() {
       if (cm.nativeInputHandler === input) cm.nativeInputHandler = nativeInput;
       if (cm.indentMore === more) cm.indentMore = indentMore;
-      if (cm.indentLess === less) cm.indentLess = indentLess;
+      if (cm.indentLess === less) cm.indentLess = less;
     },
   });
   cm.state.lindvimeraTarget = delegate;
@@ -186,27 +217,23 @@ export function installMarkdownEditingMotion(): void {
   const vertical: MotionFn = (editor, head, args, vim) => {
     const cm = editor as EditingMirror;
     const configuration = configurations.get(cm)!;
-    const index = documentIndex(cm);
-    const from = markdownContentStart(index, cm.indexFromPos(head));
-    const content = from === undefined ? 0 : from - cm.indexFromPos({ line: head.line, ch: 0 });
-    if (
-      configuration.goalHead &&
-      (configuration.goalHead.line !== head.line || configuration.goalHead.ch !== head.ch)
-    )
-      configuration.goal = undefined;
-    if (configuration.goal === undefined) configuration.goal = Math.max(0, head.ch - content);
-    const amount = (args.forward ? 1 : -1) * args.repeat;
-    const physical = Math.max(cm.firstLine(), Math.min(cm.lastLine(), head.line + amount));
-    // findPosV is used only to skip native folded rows; j/k stay physical, while gj/gk retain display goals.
-    const visible = cm.findPosV(head, amount, "line", vim.lastHSPos);
-    const line = args.forward ? Math.max(physical, visible.line) : Math.min(physical, visible.line);
-    const to = markdownContentStart(index, cm.indexFromPos({ line, ch: 0 }));
-    const prefix = to === undefined ? 0 : to - cm.indexFromPos({ line, ch: 0 });
-    const ch = Math.min(Math.max(0, cm.getLine(line).length - 1), prefix + configuration.goal);
-    vim.lastHPos = ch;
-    vim.lastHSPos = cm.charCoords({ line, ch }, "div").left;
-    configuration.goalHead = { line, ch };
-    return { line, ch };
+    const result = resolveLiveVerticalMotion({
+      view: cm.cm6,
+      doc: cm,
+      index: documentIndex(cm),
+      indexFromPos: (position) => cm.indexFromPos(position),
+      head,
+      forward: !!args.forward,
+      repeat: args.repeat,
+      state: configuration.verticalState,
+      findPosV: (from, amount, unit, horizontal) => cm.findPosV(from, amount, unit, horizontal),
+      charCoords: (position, mode) => cm.charCoords(position, mode),
+      lastHPos: vim.lastHPos,
+      lastHSPos: vim.lastHSPos,
+    });
+    vim.lastHPos = result.lastHPos;
+    if (result.lastHSPos !== undefined) vim.lastHSPos = result.lastHSPos;
+    return result.position;
   };
   Vim.defineMotion("lindvimeraContentVertical", vertical);
   for (const [key, forward] of [
@@ -222,12 +249,143 @@ export function installMarkdownEditingMotion(): void {
         {
           context,
           when: (editor: CodeMirrorV) =>
-            body(editor as EditingMirror) &&
+            body(editor) &&
+            !editor.state.vim?.visualBlock &&
             configurations.get(editor)?.host?.livePreview() === true,
         },
       );
   }
-  Vim.defineMotion("lindvimeraContentStart", (editor, head) => {
+
+  const displayVertical: MotionFn = (editor, head, args, vim) => {
+    const cm = editor as EditingMirror;
+    const configuration = configurations.get(cm)!;
+    const view = cm.getEditingView?.() ?? cm.cm6;
+    if (!view)
+      return cm.findPosV(head, (args.forward ? 1 : -1) * args.repeat, "line", vim.lastHSPos);
+    const result = resolveLiveDisplayVerticalMotion({
+      view,
+      doc: cm,
+      head,
+      forward: !!args.forward,
+      repeat: args.repeat,
+      state: configuration.displayState,
+      findPosV: (from, amount, unit, horizontal) => cm.findPosV(from, amount, unit, horizontal),
+      charCoords: (position, mode) => cm.charCoords(position, mode),
+      lastHSPos: vim.lastHSPos,
+    });
+    vim.lastHPos = result.lastHPos;
+    if (result.lastHSPos !== undefined) vim.lastHSPos = result.lastHSPos;
+    return result.position;
+  };
+  Vim.defineMotion("lindvimeraDisplayVertical", displayVertical);
+  for (const [key, forward] of [
+    ["gj", true],
+    ["gk", false],
+  ] as const) {
+    for (const context of ["normal", "visual"] as const)
+      Vim.mapCommand(
+        key,
+        "motion",
+        "lindvimeraDisplayVertical",
+        { forward },
+        {
+          context,
+          when: (editor: CodeMirrorV) =>
+            body(editor) &&
+            !editor.state.vim?.visualBlock &&
+            configurations.get(editor)?.host?.livePreview() === true,
+        },
+      );
+  }
+
+  Vim.defineMotion("lindvimeraLiveCharacter", (editor, head, args, vim, input) => {
+    const cm = editor as EditingMirror;
+    const view = cm.getEditingView?.() ?? cm.cm6;
+    const provider = cm.state.wordBoundaryProvider ?? fallbackWords;
+    let target: Pos;
+    if (!view) {
+      target = head;
+      for (let i = 0; i < args.repeat; i++)
+        target = provider.character(cm, target, args.forward ? 1 : -1);
+    } else {
+      target = livePreviewCharacter(view, cm, head, !!args.forward, args.repeat, provider);
+    }
+    if (!input?.operator) vim.lastHPos = target.ch;
+    return target;
+  });
+  for (const [key, forward] of [
+    ["h", false],
+    ["l", true],
+  ] as const) {
+    for (const context of ["normal", "visual"] as const)
+      Vim.mapCommand(
+        key,
+        "motion",
+        "lindvimeraLiveCharacter",
+        { forward },
+        {
+          context,
+          when: (editor: CodeMirrorV) =>
+            body(editor) &&
+            !editor.state.vim?.visualBlock &&
+            configurations.get(editor)?.host?.livePreview() === true,
+        },
+      );
+  }
+
+  Vim.defineMotion("lindvimeraLiveWord", (editor, head, args, vim, input) => {
+    const cm = editor as EditingMirror;
+    const view = cm.getEditingView?.() ?? cm.cm6;
+    const provider = cm.state.wordBoundaryProvider ?? fallbackWords;
+    const target = !view
+      ? provider.move(cm, head, {
+          repeat: args.repeat,
+          forward: args.forward,
+          wordEnd: args.wordEnd,
+        })
+      : livePreviewWord(
+          view,
+          cm,
+          head,
+          {
+            repeat: args.repeat,
+            forward: args.forward,
+            wordEnd: args.wordEnd,
+            bigWord: args.bigWord,
+          },
+          provider,
+          fallbackCache,
+        );
+    if (!input?.operator) vim.lastHPos = target.ch;
+    return target;
+  });
+  for (const [key, forward, wordEnd, bigWord] of [
+    ["w", true, false, false],
+    ["b", false, false, false],
+    ["e", true, true, false],
+    ["ge", false, true, false],
+    ["W", true, false, true],
+    ["B", false, false, true],
+    ["E", true, true, true],
+    ["gE", false, true, true],
+  ] as const) {
+    for (const context of ["normal", "visual"] as const)
+      Vim.mapCommand(
+        key,
+        "motion",
+        "lindvimeraLiveWord",
+        { forward, wordEnd, inclusive: wordEnd, ...(bigWord ? { bigWord: true } : {}) },
+        {
+          context,
+          when: (editor: CodeMirrorV) =>
+            body(editor) &&
+            !editor.state.vim?.visualBlock &&
+            configurations.get(editor)?.host?.livePreview() === true,
+        },
+      );
+  }
+
+  Vim.defineMotion("lindvimeraContentStart", (editor, head, _args, vim, input) => {
     const cm = editor as EditingMirror;
     // Recorded c^ motions also use this fallback after settings/target changes.
     const offset = active(cm)
@@ -236,12 +394,37 @@ export function installMarkdownEditingMotion(): void {
     if (offset === undefined) {
       const line = cm.getLine(head.line);
       const first = line.search(/\S/);
-      return { line: head.line, ch: first === -1 ? line.length : first };
+      let start: Pos = { line: head.line, ch: first === -1 ? line.length : first };
+      if (
+        first !== -1 &&
+        !input?.operator &&
+        !vim.visualBlock &&
+        body(cm) &&
+        configurations.get(cm)?.host?.livePreview() === true
+      ) {
+        const view = cm.getEditingView?.() ?? cm.cm6;
+        if (view) {
+          start = { line: start.line, ch: livePreviewContentStart(view, start.line, start.ch) };
+          vim.lastHPos = start.ch;
+        }
+      }
+      return start;
     }
-    const start = cm.posFromIndex(offset);
+    let start = cm.posFromIndex(offset);
+    if (
+      !input?.operator &&
+      !vim.visualBlock &&
+      body(cm) &&
+      configurations.get(cm)?.host?.livePreview() === true
+    ) {
+      const view = cm.getEditingView?.() ?? cm.cm6;
+      if (view)
+        start = { line: start.line, ch: livePreviewContentStart(view, start.line, start.ch) };
+    }
     // Normal/Visual have no character at EOL. An empty body has no motion or
     // operator range; I can still enter at the insertion point above.
     if (start.ch === cm.getLine(start.line).length) return;
+    if (!input?.operator) vim.lastHPos = start.ch;
     return start;
   });
   Vim.mapCommand(

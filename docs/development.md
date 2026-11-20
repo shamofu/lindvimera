@@ -88,7 +88,7 @@ Normalの`o`は現在行の末尾でホストのEnter処理を実行します。
 
 `^`は専用の条件付きmotionで本文先頭を返し、Normal・Visual・operatorで共有します。Normalの`I`も同じ本文先頭を使います。引用・リスト・タスク・ATX見出しの接頭辞を除き、空の本文では`^`は元の位置、`I`は接頭辞の直後になります。標準の最初の非空白文字を求めるmotion全体は差し替えず、他のインデント・貼り付け操作へ波及させません。
 
-`O/^/I`のMarkdown拡張は各実行時に`markdownEditing`と本文の編集対象・文脈を確認し、コード・frontmatter・表・ネイティブセルや設定無効時は標準Vimへ委譲します。同梱エンジンでは設定をオフにすると`o`の追加処理も無効になります。内蔵エンジンの`o`と両エンジンのInsert Enterはホストの入力処理に従います。Visualの`I/o/O`、`J`、段落操作はこの設定の対象外です。Live Previewの`j/k`は設定と独立してリスト本文からの列を維持し、Source・行単位operator・矩形選択では原文の列を使います。`j/k`は物理行を基準に折り畳み行を飛ばし、`gj/gk`は表示行を使います。ユーザー割り当ては通常どおり先に解決し、CommandPolicyは条件付きmotionを許可して標準操作へのフォールバックを残します。
+`O/^/I`のMarkdown拡張は各実行時に`markdownEditing`と本文の編集対象・文脈を確認し、コード・frontmatter・表・ネイティブセルや設定無効時は標準Vimへ委譲します。同梱エンジンでは設定をオフにすると`o`の追加処理も無効になります。内蔵エンジンの`o`と両エンジンのInsert Enterはホストの入力処理に従います。Visualの`I/o/O`、`J`、段落操作はこの設定の対象外です。Live Previewの本文では、設定と独立して`src/markdown/live-preview.ts`を介してリスト本文・表示中の本文列を維持し、折り畳まれた`<ins>`などのインラインHTMLやMarkdown装飾（`j/k`・`gj/gk`・`h/l`/`<Left>/<Right>`・`w/b/e/ge`・`W/B/E/gE`・`^`・`.cm-html-embed`クリック）をスキップします（展開後のタグ編集と`operatorPending`・矩形選択・Source・ネイティブテーブルセルの原文列は維持、`builtin`では`setCursor`を事前同期して`_x`スナップを抑止）。`j/k`は物理行を基準に折り畳み行を飛ばし、`gj/gk`は表示行とwidget座標を使います。ユーザー割り当ては通常どおり先に解決し、CommandPolicyは条件付きmotionを許可して標準操作へのフォールバックを残します。
 
 `src/markdown/blocks.ts`は`@lezer/markdown`の`parser.configure(TaskList)`で原文を解析します。frontmatterだけを同じUTF-16長・改行位置の空白へ置き換えてから解析し、文書直下のATX／Setext見出しと、引用外のListItemから範囲・親子関係を作ります。リストの継続行・子項目・コード・水平線の判定をインデントの正規表現だけで代用しません。既存のインラインオブジェクトと構造移動の索引は維持し、同じ文書revisionの索引を再利用します。
 

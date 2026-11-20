@@ -27,6 +27,7 @@ import { ExSession } from "../ex/session";
 import { PendingHints } from "../input/hints";
 import { configureFolding, clearFolding } from "../folding";
 import type { MarkdownEditingHost } from "../markdown/editing-runtime";
+import { createLivePreviewClickExtension } from "../markdown/live-preview";
 
 export interface EditorHost {
   isActive?(): boolean;
@@ -624,6 +625,12 @@ export function lindvimeraEditor(host: EditorHost): Extension {
       host.settings().cursorColor !== null ? { class: "lindvimera-custom-cursor" } : null,
     ),
     EditorState.allowMultipleSelections.of(true),
+    createLivePreviewClickExtension({
+      isActive: () => host.isActive?.() !== false,
+      isLivePreview: (view) =>
+        host.markdownHost?.livePreview() === true && !view.dom.closest(".cm-table-widget"),
+      isInsertMode: (view) => editorSession(view)?.cm.state.vim?.insertMode === true,
+    }),
     escapePreview,
     group.extension,
     ViewPlugin.define((view) => new EditorSession(view, host, group)),

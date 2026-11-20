@@ -1,5 +1,6 @@
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { BackendHost, EngineBackend } from "../types";
+import { createLivePreviewClickExtension, isLivePreviewView } from "../../markdown/live-preview";
 import { analyseKeyBindings } from "./policy";
 import { NativeExtensions, installDefinitions } from "./extensions";
 import { NativePendingHints } from "./hints";
@@ -308,6 +309,11 @@ export function createBackend(host: BackendHost): EngineBackend {
   }
 
   host.registerEditorExtension([
+    createLivePreviewClickExtension({
+      isActive: () => !disposed && host.isActive(),
+      isLivePreview: isLivePreviewView,
+      isInsertMode: (view) => getNativeCM(view)?.state.vim?.insertMode === true,
+    }),
     ViewPlugin.fromClass(
       class {
         constructor(readonly view: EditorView) {

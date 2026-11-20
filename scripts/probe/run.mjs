@@ -1,6 +1,6 @@
 import { copyFile, mkdir, writeFile, access, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, basename } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { distributionDirectory, runtimeFiles } from "../distribution.mjs";
 import { buildProbe, harnessId } from "./build.mjs";
@@ -39,7 +39,10 @@ export async function prepareProbe({
   }
   const installedHashes = await verifyRuntimeFiles(candidateHashes, plugin);
   if (enableHarness) await buildProbe(harness);
-  await copyFile(archive, join(profile, "obsidian-1.15.0.asar"));
+  const archiveName = /^obsidian-\d+\.\d+\.\d+\.asar$/i.test(basename(archive))
+    ? basename(archive)
+    : "obsidian-1.15.1.asar";
+  await copyFile(archive, join(profile, archiveName));
   const config = {
     vaults: { "0000000000000017": { path: vault, ts: Date.now(), open: true } },
     updateDisabled: true,

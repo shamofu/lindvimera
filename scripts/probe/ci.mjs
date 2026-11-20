@@ -101,7 +101,7 @@ async function stopApplication(child, browser) {
 
 export async function runCiProbe() {
   if (process.platform !== "win32" || process.arch !== "x64")
-    throw new Error("The E2E contract requires Windows x64 / Obsidian 1.15.0.");
+    throw new Error("The E2E contract requires Windows x64 / Obsidian 1.15.x.");
   await mkdir(results, { recursive: true });
   for (const name of [
     ...Object.values(reportFiles),
@@ -325,6 +325,75 @@ export async function runCiProbe() {
     }, harnessId);
     await runSuite("runNativeRegression");
     await runSuite("runHostRegression");
+    {
+      const docText = "prefix <ins>abcdef</ins> suffix\n";
+      await page.evaluate(async (text) => {
+        document.querySelectorAll(".notice-container .notice").forEach((n) => n.remove());
+        const app = globalThis.app;
+        const leaf = app.workspace.getLeaf("tab");
+        const existing = app.vault.getAbstractFileByPath("Live preview click.md");
+        const file = existing ? existing : await app.vault.create("Live preview click.md", text);
+        await app.vault.modify(file, text);
+        await leaf.openFile(file, { state: { mode: "source", source: false } });
+        app.workspace.setActiveLeaf(leaf, { focus: true });
+        globalThis.__lpClickLeaf = leaf;
+      }, docText);
+      await page.waitForFunction(
+        () => !!document.querySelector(".workspace-leaf.mod-active .cm-html-embed ins"),
+      );
+      await delay(150);
+      const rel = await page.evaluate(() => {
+        document.querySelectorAll(".notice-container .notice").forEach((n) => n.remove());
+        const el = [
+          ...document.querySelectorAll(".workspace-leaf.mod-active .cm-html-embed ins"),
+        ].find((node) => (node.textContent ?? "").includes("abcdef"));
+        if (!el) throw new Error("Missing <ins>abcdef</ins> element");
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let textNode = null;
+        while ((textNode = walker.nextNode())) {
+          if ((textNode.nodeValue ?? "").includes("abcdef")) break;
+        }
+        if (!textNode) throw new Error("Missing <ins> text node");
+        const range = document.createRange();
+        range.setStart(textNode, 3);
+        range.setEnd(textNode, 4);
+        const charRect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        return {
+          x: (charRect.left + charRect.right) / 2 - elRect.left,
+          y: (charRect.top + charRect.bottom) / 2 - elRect.top,
+        };
+      });
+      await page
+        .locator(".workspace-leaf.mod-active .cm-html-embed ins", { hasText: "abcdef" })
+        .first()
+        .click({ position: rel });
+      await page.waitForFunction(
+        () => globalThis.__lpClickLeaf.view.editMode.cm.state.selection.main.head !== 0,
+        undefined,
+        { timeout: 3_000 },
+      );
+      const head = await page.evaluate(() => {
+        const leaf = globalThis.__lpClickLeaf;
+        const result = leaf.view.editMode.cm.state.selection.main.head;
+        leaf.detach();
+        delete globalThis.__lpClickLeaf;
+        return result;
+      });
+      assert.equal(head, 15, `Embedded .cm-html-embed click landed at ${head} instead of 15.`);
+      await page.evaluate(async () => {
+        await globalThis.app.workspace
+          .getLeavesOfType("lindvimera-input-probe")[0]
+          .view.recordKeyboardRegression({
+            "host-live-preview-html-click": {
+              passed: true,
+              detail:
+                "Real Obsidian mouse click on .cm-html-embed landed inside <ins> body text (head=15).",
+              observedAt: new Date().toISOString(),
+            },
+          });
+      });
+    }
     await runSuite("preparePhysicalInput");
     await page.bringToFront();
     await page.locator(".lindvimera-probe .probe-editor .cm-content").focus();
@@ -366,7 +435,7 @@ export async function runCiProbe() {
     assert.equal(report.schemaVersion, 3);
     assert.equal(report.behavior, "cell-editor-v1");
     assert.equal(report.scope, "non-ime");
-    assert.equal(report.environment?.obsidian, "1.15.0");
+    assert.match(report.environment?.obsidian ?? "", /^1\.15\./);
     assert.equal(report.environment?.platform, "win32");
     assert.equal(report.environment?.plugin, manifest.version);
     const required = [
@@ -399,6 +468,8 @@ export async function runCiProbe() {
       "native-table-entry-exit",
       "native-fixture-restored",
       "host-source-live-preview",
+      "host-live-preview-decorations",
+      "host-live-preview-html-click",
       "host-smart-lists-115",
       "host-extended-editing",
       "host-folding",

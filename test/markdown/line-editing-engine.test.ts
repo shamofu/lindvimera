@@ -1,19 +1,25 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { EditorState, Transaction } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateField,
+  Transaction,
+  type Extension,
+} from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { history } from "@codemirror/commands";
 import { getCM, vim, Vim } from "@replit/codemirror-vim";
 import { configureMarkdown, installMarkdownCommands, clearMarkdown } from "../../src/markdown";
 import type { MarkdownEditingHost } from "../../src/markdown/editing-runtime";
 
 const views: EditorView[] = [];
-function editor(text: string, at = 0, host?: MarkdownEditingHost) {
+function editor(text: string, at = 0, host?: MarkdownEditingHost, extra: Extension[] = []) {
   const view = new EditorView({
     parent: document.body,
     state: EditorState.create({
       doc: text,
       selection: { anchor: at },
-      extensions: [history(), vim()],
+      extensions: [history(), vim(), ...extra],
     }),
   });
   views.push(view);
@@ -271,5 +277,114 @@ describe("Markdown line editing through the actual Vim dispatcher", () => {
     expect(e.cm.state.lindvimeraTarget).not.toBe(previous);
     clearMarkdown(e.cm);
     expect(e.cm.state.lindvimeraTarget).toBe(previous);
+  });
+
+  it("maintains body column and visible text across Live Preview decorations on embedded motions", () => {
+    class InsWidget extends WidgetType {
+      constructor(private readonly html: string) {
+        super();
+      }
+      toDOM(): HTMLElement {
+        const el = document.createElement("span");
+        el.className = "cm-html-embed";
+        el.innerHTML = this.html;
+        return el;
+      }
+    }
+
+    const buildCollapsed = (state: EditorState): DecorationSet => {
+      const head = state.selection.main.head;
+      const builder = new RangeSetBuilder<Decoration>();
+      const decos: { from: number; to: number; widget?: WidgetType }[] = [];
+      for (let ln = 0; ln < state.doc.lines; ln++) {
+        const line = state.doc.line(ln + 1);
+        const insRe = /<ins>(.*?)<\/ins>/g;
+        let m: RegExpExecArray | null;
+        while ((m = insRe.exec(line.text)) !== null) {
+          const from = line.from + m.index;
+          const to = from + m[0].length;
+          if (!(head >= from && head < to)) {
+            decos.push({ from, to, widget: new InsWidget(`<ins>${m[1]}</ins>`) });
+          }
+        }
+        const boldRe = /\*\*([^*]+)\*\*/g;
+        while ((m = boldRe.exec(line.text)) !== null) {
+          const from = line.from + m.index;
+          const to = from + m[0].length;
+          if (head >= from && head < to) continue;
+          decos.push({ from, to: from + 2 });
+          decos.push({ from: to - 2, to });
+        }
+      }
+      decos.sort((a, b) => a.from - b.from || a.to - b.to);
+      for (const d of decos) {
+        builder.add(d.from, d.to, Decoration.replace(d.widget ? { widget: d.widget } : {}));
+      }
+      return builder.finish();
+    };
+
+    const decoField = StateField.define<DecorationSet>({
+      create: buildCollapsed,
+      update: (v, tr) => (tr.docChanged || tr.selection ? buildCollapsed(tr.state) : v),
+      provide: (f) => EditorView.decorations.from(f),
+    });
+
+    let live = true;
+    const host: MarkdownEditingHost = {
+      smartLists: () => true,
+      livePreview: () => live,
+      enter: () => false,
+      indent: () => false,
+    };
+
+    const doc = ["abcdefgh", "- <ins>01234567</ins>", "xy**z012**34"].join("\n");
+    const e = editor(doc, 0, host, [decoField]);
+    e.cm.charCoords = (pos) => ({
+      left: pos.ch * 8,
+      top: pos.line * 16,
+      bottom: pos.line * 16 + 16,
+    });
+
+    // j from 'e' (col 4) to list line with <ins>: lands on '4' (2 + 5 + 4 = 11)
+    e.keys("4lj");
+    expect(e.cm.getCursor()).toMatchObject({ line: 1, ch: 11 });
+    // ^ on line 1 skips "- " and collapsed/canonical? Note: cursor is inside <ins>, so it expanded on entry;
+    // jump to line 2 ch 0 and move w/l across collapsed **z012**!
+    e.keys("j0");
+    expect(e.cm.getCursor()).toEqual({ line: 2, ch: 0 });
+    e.keys("2l"); // x -> y -> z (skips opening ** at 2..4, lands on ch 4)
+    expect(e.cm.getCursor()).toEqual({ line: 2, ch: 4 });
+
+    // $ -> h -> j resets lastHPos (does not jump to Infinity/last visible char of line 2!)
+    e.cm.setCursor({ line: 0, ch: 0 });
+    e.keys("$hj");
+    expect(e.cm.getCursor()).toEqual({ line: 1, ch: 13 }); // col 6 ('g') -> '6' inside <ins>01234567</ins>
+
+    // gj moves visually on line
+    e.cm.setCursor({ line: 0, ch: 1 });
+    e.keys("gj");
+    expect(e.cm.getCursor().line).toBe(1);
+
+    // W moves across big words
+    e.cm.setCursor({ line: 1, ch: 0 });
+    e.keys("W");
+    expect(e.cm.getCursor()).toEqual({ line: 1, ch: 7 }); // '0' after collapsed/list '- ' -> ch 7
+
+    // operatorPending (dl), Visual Block (<C-v>), and Source mode keep raw source offsets
+    e.cm.setCursor({ line: 2, ch: 0 });
+    e.keys("2l"); // expanded at 'z' (ch 4)
+    e.cm.setCursor({ line: 2, ch: 1 });
+    e.keys("dl"); // deletes 'y' (raw col 1), does NOT skip **!
+    expect(e.cm.getLine(2)).toBe("x**z012**34");
+
+    e.cm.setCursor({ line: 0, ch: 2 });
+    e.keys("<C-v>j");
+    expect(e.cm.getCursor()).toEqual({ line: 1, ch: 2 });
+    e.keys("<Esc>");
+
+    live = false;
+    e.cm.setCursor({ line: 2, ch: 0 });
+    e.keys("2l");
+    expect(e.cm.getCursor()).toEqual({ line: 2, ch: 2 }); // raw '*' in Source mode
   });
 });

@@ -106,6 +106,162 @@ export async function runHostRegression(plugin: LindvimeraPlugin, check: Check):
         "Source transition lost Lindvimera.",
       );
     });
+    await check("host-live-preview-decorations", async () => {
+      const lpDoc = [
+        "0123456789",
+        "ab<ins>cdefgh</ins>ij",
+        "ab**cdefgh**ij",
+        "ab[[target|cdefgh]]ij",
+        "0123456789",
+        "- ab<ins>cdef</ins>gh",
+        "foo <ins>bar</ins> baz",
+        "ab<ins></ins>",
+        "<ins>日本語テスト</ins> 末尾",
+      ].join("\n");
+      await leaf.setViewState({
+        type: "markdown",
+        state: { file: path, mode: "source", source: false },
+      });
+      await settle();
+      const lpView = owner(markdown).cm;
+      const lpCm = getCM(lpView)!;
+      key(lpView, "<Esc>");
+      lpView.dispatch({
+        changes: { from: 0, to: lpView.state.doc.length, insert: lpDoc },
+        selection: { anchor: 0 },
+        annotations: [Transaction.userEvent.of("set"), Transaction.addToHistory.of(false)],
+      });
+      lpView.focus();
+      await waitFor(
+        () => lpView.contentDOM.querySelectorAll(".cm-html-embed").length >= 3,
+        "Live Preview HTML embeds did not render.",
+      );
+      await settle();
+
+      // j/k preserve visible body column 5 ('5' -> 'f') across <ins>, **, [[target|alias]], list -
+      key(lpView, "gg05l");
+      assert(lpCm.getCursor().ch === 5, "Initial col 5 setup failed.");
+      key(lpView, "j");
+      assert(
+        lpCm.getCursor().line === 1 && lpCm.getCursor().ch === 10,
+        `j onto <ins> landed at ch ${lpCm.getCursor().ch} instead of 10.`,
+      );
+      key(lpView, "j");
+      assert(
+        lpCm.getCursor().line === 2 && lpCm.getCursor().ch === 7,
+        `j onto ** landed at ch ${lpCm.getCursor().ch} instead of 7.`,
+      );
+      key(lpView, "j");
+      assert(
+        lpCm.getCursor().line === 3 && lpCm.getCursor().ch === 14,
+        `j onto wikilink landed at ch ${lpCm.getCursor().ch} instead of 14.`,
+      );
+      key(lpView, "j");
+      assert(lpCm.getCursor().line === 4 && lpCm.getCursor().ch === 5, "j to plain line 4 failed.");
+      key(lpView, "j");
+      assert(
+        lpCm.getCursor().line === 5 && lpCm.getCursor().ch === 12,
+        `j onto list <ins> landed at ch ${lpCm.getCursor().ch} instead of 12.`,
+      );
+      key(lpView, "4k");
+      assert(
+        lpCm.getCursor().line === 1 && lpCm.getCursor().ch === 10,
+        "k roundtrip to <ins> failed.",
+      );
+      key(lpView, "k");
+      assert(lpCm.getCursor().line === 0 && lpCm.getCursor().ch === 5, "k to line 0 failed.");
+
+      // $j lands on last visible char ('j' ch 20), and $hj resets lastHPos to 8 ('i' ch 19)
+      key(lpView, "gg$j");
+      assert(
+        lpCm.getCursor().line === 1 && lpCm.getCursor().ch === 20,
+        `$j landed at ch ${lpCm.getCursor().ch} instead of 20.`,
+      );
+      key(lpView, "gg$hj");
+      assert(
+        lpCm.getCursor().line === 1 && lpCm.getCursor().ch === 19,
+        `$hj landed at ch ${lpCm.getCursor().ch} instead of 19.`,
+      );
+
+      // Collapsed l entry into <ins>bar</ins>, then expanded char-by-char l through </ins>
+      key(lpView, "gg6j03l"); // ' ' at ch 3 before <ins>bar</ins>
+      await settle();
+      key(lpView, "l");
+      assert(
+        lpCm.getCursor().line === 6 && lpCm.getCursor().ch === 9,
+        `l entry into <ins>bar</ins> landed at ${lpCm.getCursor().ch} instead of 9.`,
+      );
+      key(lpView, "l");
+      assert(lpCm.getCursor().ch === 10, "Expanded l inside <ins> did not step to 10.");
+      key(lpView, "l");
+      assert(lpCm.getCursor().ch === 11, "Expanded l inside <ins> did not step to 11.");
+      key(lpView, "l");
+      assert(lpCm.getCursor().ch === 12, "Expanded l into closing </ins> did not step to 12.");
+
+      // w / W / b across collapsed <ins>bar</ins>
+      key(lpView, "0");
+      await settle();
+      key(lpView, "w");
+      assert(lpCm.getCursor().ch === 9, `w landed at ${lpCm.getCursor().ch} instead of 9.`);
+      key(lpView, "0");
+      await settle();
+      key(lpView, "W");
+      assert(lpCm.getCursor().ch === 9, `W landed at ${lpCm.getCursor().ch} instead of 9.`);
+      key(lpView, "$b");
+      await settle();
+      key(lpView, "b");
+      assert(lpCm.getCursor().ch === 9, `b landed at ${lpCm.getCursor().ch} instead of 9.`);
+
+      // Line 7 trailing empty tag ab<ins></ins>: l from 'b' enters ch 2
+      key(lpView, "gg7j0l");
+      await settle();
+      assert(lpCm.getCursor().ch === 1, "Failed to position at 'b' on ab<ins></ins>.");
+      key(lpView, "l");
+      assert(lpCm.getCursor().ch === 2, "Trailing empty tag fallback entry on l failed.");
+
+      // Line 8 ^ from '尾' skips collapsed <ins> and lands on '日' (ch 5)
+      key(lpView, "gg8j$");
+      await settle();
+      key(lpView, "^");
+      assert(lpCm.getCursor().ch === 5, `^ landed at ${lpCm.getCursor().ch} instead of 5.`);
+
+      // Operator-pending (dw), Visual Block (<C-v>j), and Source mode keep raw coordinates
+      key(lpView, "ggj0dw");
+      assert(
+        lpCm.getLine(1) === "<ins>cdefgh</ins>ij",
+        `dw altered raw source unexpectedly: ${lpCm.getLine(1)}`,
+      );
+      key(lpView, "u");
+      assert(
+        lpCm.getLine(1) === "ab<ins>cdefgh</ins>ij",
+        "Failed to undo dw in Live Preview decoration check.",
+      );
+      key(lpView, "gg05l<C-v>j");
+      assert(
+        lpCm.getCursor().line === 1 && lpCm.getCursor().ch === 5,
+        `Visual Block j did not stay at raw col 5 (got ${lpCm.getCursor().ch}).`,
+      );
+      key(lpView, "<Esc>");
+
+      await leaf.setViewState({
+        type: "markdown",
+        state: { file: path, mode: "source", source: true },
+      });
+      await settle();
+      const srcView = owner(markdown).cm;
+      key(srcView, "gg05lj");
+      assert(
+        getCM(srcView)!.getCursor().line === 1 && getCM(srcView)!.getCursor().ch === 5,
+        `Source mode j did not use raw col 5 (got ${getCM(srcView)!.getCursor().ch}).`,
+      );
+
+      srcView.dispatch({
+        changes: { from: 0, to: srcView.state.doc.length, insert: baseline },
+        selection: { anchor: 0 },
+        annotations: [Transaction.userEvent.of("set"), Transaction.addToHistory.of(false)],
+      });
+      await settle();
+    });
     await check("host-extended-editing", async () => {
       for (const source of [true, false]) {
         await leaf.setViewState({

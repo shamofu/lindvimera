@@ -113,7 +113,11 @@ public static class ProbeKeyboard {
     EnumWindows((window, unused) => {
       uint processId;
       GetWindowThreadProcessId(window, out processId);
-      if (processId == expectedProcessId && IsWindowVisible(window)) windows.Add(window);
+      if (processId == expectedProcessId && IsWindowVisible(window)) {
+        var name = new StringBuilder(64);
+        if (GetClassName(window, name, name.Capacity) > 0 && name.ToString() == "Chrome_WidgetWin_1")
+          windows.Add(window);
+      }
       return true;
     }, IntPtr.Zero);
     if (windows.Count != 1) throw new InvalidOperationException("Expected exactly one visible window owned by the isolated Obsidian process; got " + windows.Count);
