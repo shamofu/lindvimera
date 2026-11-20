@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { EditorState, RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";

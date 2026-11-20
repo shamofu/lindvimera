@@ -1,6 +1,7 @@
 if (typeof window !== "undefined" && typeof Document !== "undefined") {
   // Obsidian supplies these DOM helpers in every window; jsdom does not.
   Object.defineProperty(Document.prototype, "win", {
+    configurable: true,
     get() {
       return this.defaultView;
     },

@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { expect, it } from "vitest";
 import { gzipSync } from "node:zlib";
 import { createBundledAssetReader } from "../../src/word/asset-reader";

@@ -17,6 +17,7 @@ export default defineConfig({
   },
   test: {
     include: ["test/**/*.test.ts"],
+    pool: "vmThreads",
     environment: "jsdom",
     setupFiles: ["./test/obsidian-dom.ts"],
     restoreMocks: true,
