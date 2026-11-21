@@ -185,6 +185,54 @@ test("removal fixtures physically omit opposite backend, infrastructure and test
   );
 });
 
+test("builtin removal fixture omits embedded probe and owned files while retaining builtin and shared files", () => {
+  const sourceRoot = mkdtempSync(join(tmpdir(), "lindvimera-probe-removal-selftest-"));
+  const embeddedFiles = [
+    "src/input/escape-preview.ts",
+    "scripts/probe/cursor-color-regression.mjs",
+    "scripts/probe/guide-regression.mjs",
+    "test/engines/prepare-vendor.test.mjs",
+    "test/probe/editing-cases.ts",
+    "test/probe/ex-cases.ts",
+    "test/probe/folding-cases.ts",
+    "test/probe/hint-cases.ts",
+    "test/probe/host-regression.ts",
+    "test/probe/main.ts",
+    "test/probe/performance.ts",
+    "test/probe/runtime.ts",
+    "test/probe/runtime.test.ts",
+    "test/probe/smart-list-cases.ts",
+    "test/probe/structure-cases.ts",
+    "test/probe/table-probe.ts",
+    "test/probe/view.ts",
+  ];
+  const retainedFiles = [
+    "test/probe/builtin-main.ts",
+    "test/probe/styles.css",
+    "test/probe/build-boundaries.test.mjs",
+    "test/probe/artifact-identity.test.mjs",
+  ];
+  const files = {
+    "src/engines/embedded/index.ts": "export const realEmbedded = true;",
+    "src/engines/builtin/index.ts": "export const realBuiltin = true;",
+    "src/engines/builtin/policy.ts": "export const analyseKeyBindings = () => ({});",
+    "src/engines/registry.ts": "unused before rewrite",
+    "tsconfig.json": JSON.stringify({ compilerOptions: { paths: {} } }),
+    "package.json": JSON.stringify({ scripts: { build: "node esbuild.config.mjs" } }),
+    ...Object.fromEntries(
+      [...embeddedFiles, ...retainedFiles].map((path) => [path, "placeholder"]),
+    ),
+  };
+  for (const [path, content] of Object.entries(files)) {
+    const full = join(sourceRoot, path);
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, content);
+  }
+  const target = createRemovalFixture({ sourceRoot, survivor: "builtin" });
+  for (const path of embeddedFiles) assert.equal(existsSync(join(target, path)), false, path);
+  for (const path of retainedFiles) assert.equal(existsSync(join(target, path)), true, path);
+});
+
 test("bundle inventory rejects removed source and hidden fork dependencies", () => {
   const metadata = (...paths) => ({ inputs: Object.fromEntries(paths.map((path) => [path, {}])) });
   assert.doesNotThrow(() =>

@@ -20,7 +20,7 @@ function setup(initial: Partial<LindvimeraSettings> = {}) {
     selectEngine: vi.fn(async (engine: "embedded" | "builtin") => {
       host.settings.engine = engine;
     }),
-    saveSettings: vi.fn<(wordsOnly?: boolean) => Promise<void>>().mockResolvedValue(undefined),
+    saveSettings: vi.fn<(appearanceOnly?: boolean) => Promise<void>>().mockResolvedValue(undefined),
   };
   const tab = new LindvimeraSettingTab(
     {} as App,

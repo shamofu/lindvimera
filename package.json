@@ -30,7 +30,7 @@
     "verify:engines": "node scripts/engines/verify.mjs",
     "test:e2e": "node scripts/probe/ci.mjs",
     "probe": "node scripts/probe/run.mjs",
-    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/engines/*.test.mjs && pnpm build"
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/engines/*.test.mjs test/release/*.test.mjs && pnpm build"
   },
   "dependencies": {
     "@lezer/markdown": "1.8.0",

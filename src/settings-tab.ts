@@ -21,7 +21,7 @@ interface SettingsHost extends Plugin {
   engineConflict(): boolean;
   engineNeedsReload(): boolean;
   selectEngine(id: EngineId): Promise<void>;
-  saveSettings(wordsOnly?: boolean): Promise<void>;
+  saveSettings(appearanceOnly?: boolean): Promise<void>;
 }
 
 const toggles = {

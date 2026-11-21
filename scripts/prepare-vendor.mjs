@@ -38,8 +38,8 @@ function assertNotLink(path) {
 }
 
 /** Reconstruct the pinned Git tree, then apply each reviewed patch in order. */
-export function prepareVendor() {
-  const workspace = realpathSync(projectRoot);
+export function prepareVendor(root = projectRoot) {
+  const workspace = realpathSync(root);
   const manifest = JSON.parse(readFileSync(resolve(workspace, "patches/series.json"), "utf8"));
   if (!/^[0-9a-f]{40}$/.test(manifest.baseCommit)) {
     throw new Error("patches/series.json must pin a full 40-character baseCommit.");
@@ -51,6 +51,21 @@ export function prepareVendor() {
     throw new Error(
       `Vim submodule revision mismatch: expected ${manifest.baseCommit}, received ${actual}.`,
     );
+  }
+
+  const seen = new Set();
+  for (const patch of manifest.patches) {
+    if (!patch.file || !patch.purpose || !Array.isArray(patch.tests) || patch.tests.length === 0) {
+      throw new Error("Every patch needs a file, purpose, and non-empty regression tests list.");
+    }
+    if (seen.has(patch.file)) throw new Error(`Duplicate patch: ${patch.file}`);
+    seen.add(patch.file);
+    containedPath(resolve(workspace, "patches"), patch.file);
+    for (const testFile of patch.tests) {
+      if (typeof testFile !== "string" || !existsSync(containedPath(workspace, testFile))) {
+        throw new Error(`Missing regression test for ${patch.file}: ${String(testFile)}`);
+      }
+    }
   }
 
   // Only these verified workspace descendants may be recursively replaced.
@@ -78,13 +93,7 @@ export function prepareVendor() {
   git(target, ["init", "--quiet"]);
   git(target, ["config", "core.autocrlf", "false"]);
   git(target, ["config", "core.eol", "lf"]);
-  const seen = new Set();
   for (const patch of manifest.patches) {
-    if (!patch.file || !patch.purpose || !Array.isArray(patch.tests) || patch.tests.length === 0) {
-      throw new Error("Every patch needs a file, purpose, and non-empty regression tests list.");
-    }
-    if (seen.has(patch.file)) throw new Error(`Duplicate patch: ${patch.file}`);
-    seen.add(patch.file);
     const patchPath = containedPath(resolve(workspace, "patches"), patch.file);
     try {
       git(target, ["apply", "--whitespace=error-all", patchPath]);

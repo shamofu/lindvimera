@@ -150,16 +150,7 @@ export function createRemovalFixture({
       verbatimSymlinks: true,
       filter(path) {
         const local = relative(sourceRoot, path).replaceAll("\\", "/");
-        const omit =
-          ownsPath(removed, local) ||
-          (removed === "embedded" &&
-            local.startsWith("test/probe/") &&
-            ![
-              "test/probe/builtin-main.ts",
-              "test/probe/styles.css",
-              "test/probe/build-boundaries.test.mjs",
-              "test/probe/artifact-identity.test.mjs",
-            ].includes(local));
+        const omit = ownsPath(removed, local);
         if (omit) omitted.push(local);
         return !omit;
       },
