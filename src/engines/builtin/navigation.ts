@@ -2,18 +2,17 @@ import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { NavigationTracker, type NavigationAdapter, type Pos } from "../../navigation/tracker";
 import type { BackendHost } from "../types";
 import { NativeCommandQueue } from "./ex-mapping";
-import { getNativeCM, type NativeCM, type NativeCommand, type NativeVim } from "./native";
+import {
+  getNativeCM,
+  resolveEditorLeaf,
+  type NativeCM,
+  type NativeCommand,
+  type NativeDocumentView,
+  type NativeVim,
+} from "./native";
 
-interface Owner {
-  cm: EditorView;
-  tableCell?: { cm: EditorView } | null;
-}
-interface DocumentView {
-  file?: object;
-  editMode?: Owner;
-}
 interface Group {
-  document: DocumentView;
+  document: NativeDocumentView;
   parent: EditorView;
   adapter: NavigationAdapter;
   tracker: NavigationTracker;
@@ -113,16 +112,9 @@ export class NativeNavigationManager {
 
   attach(cm: NativeCM, vim: NativeVim): void {
     if (this.disposed || this.adapters.has(cm)) return;
-    let document: DocumentView | undefined;
-    const workspace = this.host.app.workspace as unknown as {
-      iterateAllLeaves?(callback: (leaf: { view?: DocumentView }) => void): void;
-    };
-    workspace?.iterateAllLeaves?.((leaf) => {
-      const owner = leaf.view?.editMode;
-      if (owner && (owner.cm === cm.cm6 || owner.tableCell?.cm === cm.cm6)) document = leaf.view;
-    });
-    if (!document?.editMode) return;
-    const parent = document.editMode.cm;
+    const match = resolveEditorLeaf(this.host.app, cm.cm6);
+    if (!match) return;
+    const { document, parent } = match;
     let group = this.groups.get(parent);
     if (!group) {
       const documentView = document;

@@ -4,6 +4,7 @@ import { getCM, Vim, vimTarget } from "@replit/codemirror-vim";
 import type { CodeMirrorV } from "@replit/codemirror-vim-core";
 import { nativeCellIdentity, nativeInputView, resolveNativeTable } from "./native-adapter";
 import type { NativeTableContext } from "./native-adapter";
+import { adjacentCellPosition } from "./motion";
 
 type Engine = NonNullable<ReturnType<typeof getCM>>;
 const sessions = new WeakMap<object, NativeTableSession>();
@@ -161,17 +162,11 @@ export class NativeTableSession {
     const context = this.context();
     const current = context?.currentCell;
     if (!context || !current) return;
-    const model = context.snapshot();
-    const width = model.rows[0].length;
-    const index = current.row * width + current.column;
-    const next = Math.max(
-      0,
-      Math.min(model.rows.length * width - 1, index + (forward ? 1 : -1) * Math.max(1, count)),
-    );
-    if (next === index) return;
+    const next = adjacentCellPosition(context.snapshot(), current, forward, count);
+    if (!next || (next.row === current.row && next.column === current.column)) return;
     this.options.beforeTargetChange?.();
     if (this.cm.state.vim?.visualMode) Vim.exitVisualMode(this.cm as CodeMirrorV);
-    context.focus({ row: Math.floor(next / width), column: next % width, offset: 0 });
+    context.focus(next);
     this.syncTarget();
   }
 

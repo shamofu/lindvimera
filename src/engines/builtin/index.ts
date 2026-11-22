@@ -13,6 +13,7 @@ import { NativeCommandQueue, NativeExBridge } from "./ex-mapping";
 import {
   getNativeCM,
   getNativeVim,
+  resolveEditorLeaf,
   withMappings,
   type NativeCM,
   type NativeCommand,
@@ -315,12 +316,8 @@ export function createBackend(host: BackendHost): EngineBackend {
           host.reportError(error instanceof Error ? error.message : String(error)),
       });
     const documentIdentity = () => {
-      let identity: unknown = view;
-      host.app.workspace?.iterateAllLeaves?.((leaf) => {
-        const document = leaf.view as unknown as { file?: unknown; editMode?: { cm?: EditorView } };
-        if (document.editMode?.cm?.dom.contains(view.dom)) identity = document.file;
-      });
-      return identity;
+      const match = resolveEditorLeaf(host.app, view);
+      return match ? match.file : view;
     };
     let macro = macros.get(queue);
     if (!macro) {

@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import type { BackendHost } from "../types";
-import type { NativeCM, NativeInput } from "./native";
+import { resolveEditorLeaf, type NativeCM, type NativeInput } from "./native";
 
 interface Replay {
   document: object;
@@ -21,22 +21,10 @@ export class NativeTableReplay {
   ): { table?: HTMLElement; parent: EditorView; document: object } | undefined {
     const table = cm.cm6.dom.closest<HTMLElement>(".cm-table-widget");
     if (!host.settings().tables) return;
-    let document: object | undefined;
-    let parent: EditorView | undefined;
-    const workspace = host.app.workspace as unknown as
-      | {
-          iterateAllLeaves?(
-            callback: (leaf: { view?: { file?: object; editMode?: { cm?: EditorView } } }) => void,
-          ): void;
-        }
-      | undefined;
-    workspace?.iterateAllLeaves?.((leaf) => {
-      if (leaf.view?.editMode?.cm?.dom.contains(cm.cm6.dom)) {
-        document = leaf.view.file;
-        parent = leaf.view.editMode.cm;
-      }
-    });
-    return document && parent ? { table: table ?? undefined, parent, document } : undefined;
+    const match = resolveEditorLeaf(host.app, cm.cm6);
+    return match?.file
+      ? { table: table ?? undefined, parent: match.parent, document: match.file }
+      : undefined;
   }
 
   capture(cm: NativeCM, host: BackendHost): void {

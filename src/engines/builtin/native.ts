@@ -1,4 +1,6 @@
 import type { EditorView } from "@codemirror/view";
+import type { Scope } from "obsidian";
+import type { BackendHost } from "../types";
 import type { WordDocument, WordPosition } from "../../word";
 
 export type Position = WordPosition;
@@ -125,6 +127,67 @@ export interface NativeVim {
 }
 export interface NativeWindow extends Window {
   CodeMirrorAdapter?: { Vim?: NativeVim };
+}
+
+export interface NativeLeafEditMode {
+  cm?: EditorView;
+  tableCell?: { cm?: EditorView } | null;
+  editorSuggest?: { isShowingSuggestion(): boolean };
+}
+
+export interface NativeDocumentView {
+  file?: object;
+  scope?: Scope | null;
+  editMode?: NativeLeafEditMode;
+}
+
+export function iterateEditorLeaves(
+  app: BackendHost["app"],
+  visit: (view: NativeDocumentView) => void,
+): void {
+  const workspace = app?.workspace as unknown as
+    | {
+        iterateAllLeaves?(callback: (leaf: { view?: NativeDocumentView }) => void): void;
+      }
+    | undefined;
+  workspace?.iterateAllLeaves?.((leaf) => {
+    if (leaf?.view?.editMode?.cm) visit(leaf.view);
+  });
+}
+
+export function resolveEditorLeaf(
+  app: BackendHost["app"],
+  view: EditorView,
+):
+  | {
+      document: NativeDocumentView;
+      file?: object;
+      editMode: NativeLeafEditMode & { cm: EditorView };
+      parent: EditorView;
+    }
+  | undefined {
+  let match:
+    | {
+        document: NativeDocumentView;
+        file?: object;
+        editMode: NativeLeafEditMode & { cm: EditorView };
+        parent: EditorView;
+      }
+    | undefined;
+  iterateEditorLeaves(app, (document) => {
+    const editMode = document.editMode;
+    const parent = editMode?.cm;
+    if (!editMode || !parent) return;
+    if (parent === view || editMode.tableCell?.cm === view || parent.dom?.contains(view.dom)) {
+      match = {
+        document,
+        file: document.file,
+        editMode: editMode as NativeLeafEditMode & { cm: EditorView },
+        parent,
+      };
+    }
+  });
+  return match;
 }
 
 export function getNativeVim(owner: Window): NativeVim | undefined {

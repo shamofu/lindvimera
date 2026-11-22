@@ -10,6 +10,13 @@ export interface SurroundRange {
   inner: TextRange;
 }
 
+export interface SurroundEdit {
+  from: number;
+  to: number;
+  insert: string;
+  cursor: number;
+}
+
 const aliases: Record<string, string> = { b: ")", B: "}", r: "]", a: ">" };
 const pairs: Record<string, [string, string]> = {
   "(": ["(", ")"],
@@ -113,6 +120,47 @@ export function findSurround(
   return matches[count - 1];
 }
 
+export function addSurroundEdit(
+  text: string,
+  from: number,
+  to: number,
+  replacement: string,
+  linewise = false,
+): SurroundEdit | undefined {
+  if (!replacement) return undefined;
+  let start = Math.max(0, Math.min(from, to));
+  let end = Math.min(text.length, Math.max(from, to));
+  let content = text.slice(start, end);
+  if (linewise) {
+    // yss surrounds line contents while retaining indentation and the final newline.
+    const leading = /^\s*/u.exec(content)![0].length;
+    const trailing = /\s*$/u.exec(content)![0].length;
+    start += leading;
+    end = Math.max(start, end - trailing);
+    content = text.slice(start, end);
+  }
+  return { from: start, to: end, insert: surroundText(content, replacement), cursor: start };
+}
+
+export function changeSurroundEdit(
+  text: string,
+  offset: number,
+  target: string,
+  replacement?: string,
+  count = 1,
+  precomputed?: SurroundRange,
+): SurroundEdit | undefined {
+  const range = precomputed ?? findSurround(text, offset, target, count);
+  if (!range) return undefined;
+  const content = text.slice(range.inner.from, range.inner.to);
+  return {
+    from: range.outer.from,
+    to: range.outer.to,
+    insert: replacement ? surroundText(content, replacement) : content,
+    cursor: range.outer.from,
+  };
+}
+
 /** Apply a surrounding edit to one editing target. */
 export function changeSurround(
   text: string,
@@ -121,12 +169,10 @@ export function changeSurround(
   replacement?: string,
   count = 1,
 ): { text: string; cursor: number } | undefined {
-  const range = findSurround(text, offset, target, count);
-  if (!range) return;
-  const content = text.slice(range.inner.from, range.inner.to);
-  const inserted = replacement === undefined ? content : surroundText(content, replacement);
+  const edit = changeSurroundEdit(text, offset, target, replacement, count);
+  if (!edit) return;
   return {
-    text: text.slice(0, range.outer.from) + inserted + text.slice(range.outer.to),
-    cursor: range.outer.from,
+    text: text.slice(0, edit.from) + edit.insert + text.slice(edit.to),
+    cursor: edit.cursor,
   };
 }

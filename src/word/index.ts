@@ -60,6 +60,18 @@ const japanese = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u;
 // This is the upstream CM6 adapter's word classification, applied to whole graphemes.
 const legacyWord = /[\w\p{Alphabetic}\p{Number}_]/u;
 const segmenter = new Intl.Segmenter("ja", { granularity: "grapheme" });
+
+export function segmentGraphemes(text: string): Intl.Segments {
+  return segmenter.segment(text);
+}
+
+export function lastCharacter(text: string, from = 0, to = text.length): number {
+  const start = Math.max(0, Math.min(from, text.length));
+  const end = Math.max(start, Math.min(to, text.length));
+  let last = start;
+  for (const segment of segmenter.segment(text.slice(start, end))) last = start + segment.index;
+  return last;
+}
 const parser = loadDefaultJapaneseParser();
 export const budouxSegmenter: JapaneseSegmenter = {
   id: "budoux",

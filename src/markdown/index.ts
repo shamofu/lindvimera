@@ -6,9 +6,10 @@ import type {
   Pos,
 } from "@replit/codemirror-vim-core";
 import { indexMarkdown, markdownObject, structureMotion, type MarkdownIndex } from "./ranges";
-import { findSurround, surroundText, type SurroundRange } from "./surround";
+import { addSurroundEdit, changeSurroundEdit, findSurround, type SurroundRange } from "./surround";
 import { internalLinkAt } from "./links";
 import { markdownBlockObject } from "./blocks";
+import { lastCharacter } from "../word";
 import {
   configureMarkdownEditing,
   clearMarkdownEditing,
@@ -48,13 +49,6 @@ const settings = new WeakMap<object, MarkdownSettings>();
 const indexes = new WeakMap<object, { text: string; index: MarkdownIndex; revision?: object }>();
 const pending = new WeakMap<object, PendingSurround>();
 let installed = false;
-const graphemes = new Intl.Segmenter("ja", { granularity: "grapheme" });
-
-function lastCharacter(text: string, from: number, to: number): number {
-  let last = from;
-  for (const segment of graphemes.segment(text.slice(from, to))) last = from + segment.index;
-  return last;
-}
 
 export function configureMarkdown(cm: object, options: MarkdownSettings): void {
   settings.set(cm, options);
@@ -110,18 +104,11 @@ function applyAdd(
   if (!replacement) return;
   let cursor: Pos | undefined;
   for (const range of [...ranges].reverse()) {
-    let { from, to } = orderedRange(cm, range);
-    let content = cm.getValue().slice(from, to);
-    if (args.linewise) {
-      // yss surrounds line contents while retaining indentation and the final newline.
-      const leading = /^\s*/.exec(content)![0].length;
-      const trailing = /\s*$/.exec(content)![0].length;
-      from += leading;
-      to = Math.max(from, to - trailing);
-      content = cm.getValue().slice(from, to);
-    }
-    cursor = cm.posFromIndex(from);
-    cm.replaceRange(surroundText(content, replacement), cursor, cm.posFromIndex(to));
+    const { from, to } = orderedRange(cm, range);
+    const edit = addSurroundEdit(cm.getValue(), from, to, replacement, !!args.linewise);
+    if (!edit) continue;
+    cursor = cm.posFromIndex(edit.cursor);
+    cm.replaceRange(edit.insert, cm.posFromIndex(edit.from), cm.posFromIndex(edit.to));
   }
   return cursor;
 }
@@ -131,20 +118,17 @@ function applyChange(
   args: SurroundArgs,
   ranges: CM5RangeInterface[],
 ): Pos | undefined {
-  const text = cm.getValue();
-  const range =
-    args.range ??
-    findSurround(
-      text,
-      cm.indexFromPos(ranges[0].anchor),
-      args.selectedCharacter ?? "",
-      args.count ?? 1,
-    );
-  if (!range) return;
-  const content = text.slice(range.inner.from, range.inner.to);
-  const insert = args.replacement ? surroundText(content, args.replacement) : content;
-  const cursor = cm.posFromIndex(range.outer.from);
-  cm.replaceRange(insert, cursor, cm.posFromIndex(range.outer.to));
+  const edit = changeSurroundEdit(
+    cm.getValue(),
+    cm.indexFromPos(ranges[0].anchor),
+    args.selectedCharacter ?? "",
+    args.replacement,
+    args.count ?? 1,
+    args.range,
+  );
+  if (!edit) return;
+  const cursor = cm.posFromIndex(edit.cursor);
+  cm.replaceRange(edit.insert, cm.posFromIndex(edit.from), cm.posFromIndex(edit.to));
   return cursor;
 }
 

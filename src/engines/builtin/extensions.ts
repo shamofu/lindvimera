@@ -13,6 +13,7 @@ import { planFolds, type FoldCommand } from "../../folding/ranges";
 import { indexMarkdown, markdownObject, structureMotion } from "../../markdown/ranges";
 import { markdownBlockObject } from "../../markdown/blocks";
 import { internalLinkAt } from "../../markdown/links";
+import { adjacentCellPosition } from "../../table/motion";
 import { resolveNativeTable } from "../../table/native-adapter";
 import type { NativeCommandQueue } from "./ex-mapping";
 import {
@@ -30,30 +31,24 @@ import {
   type DisplayVerticalGoalState,
   type VerticalGoalState,
 } from "../../markdown/live-preview";
-import { findSurround, surroundText } from "../../markdown/surround";
-import { createWordProvider, moveBigWord, WordBoundaryCache } from "../../word";
+import { addSurroundEdit, changeSurroundEdit, findSurround } from "../../markdown/surround";
+import { createWordProvider, lastCharacter, moveBigWord, WordBoundaryCache } from "../../word";
 import { createSentenceProvider } from "../../word/sentence";
 import type { BackendHost } from "../types";
-import type {
-  NativeArgs,
-  NativeCM,
-  NativeCommand,
-  NativeInput,
-  NativeRange,
-  NativeVim,
-  Position,
+import {
+  resolveEditorLeaf,
+  type NativeArgs,
+  type NativeCM,
+  type NativeCommand,
+  type NativeInput,
+  type NativeRange,
+  type NativeVim,
+  type Position,
 } from "./native";
 
 const prefix = "lindvimera115_";
 const sessions = new WeakMap<NativeCM, NativeExtensions>();
 const installed = new WeakSet<NativeVim>();
-const graphemes = new Intl.Segmenter("ja", { granularity: "grapheme" });
-
-function lastCharacter(text: string, from: number, to: number): number {
-  let last = from;
-  for (const segment of graphemes.segment(text.slice(from, to))) last = from + segment.index;
-  return last;
-}
 
 interface SurroundPending {
   ranges: NativeRange[];
@@ -716,29 +711,16 @@ export class NativeExtensions {
     const cm = this.cm;
     let cursor: Position | undefined;
     for (const range of [...ranges].reverse()) {
-      let from = Math.min(cm.indexFromPos(range.anchor), cm.indexFromPos(range.head));
-      let to = Math.max(cm.indexFromPos(range.anchor), cm.indexFromPos(range.head));
+      const from = Math.min(cm.indexFromPos(range.anchor), cm.indexFromPos(range.head));
+      const to = Math.max(cm.indexFromPos(range.anchor), cm.indexFromPos(range.head));
       const text = cm.getValue();
-      if (operation === "change") {
-        const found = findSurround(text, from, args.selectedCharacter ?? "", 1);
-        if (!found) continue;
-        const content = text.slice(found.inner.from, found.inner.to);
-        cursor = cm.posFromIndex(found.outer.from);
-        cm.replaceRange(
-          args.replacement ? surroundText(content, args.replacement) : content,
-          cursor,
-          cm.posFromIndex(found.outer.to),
-        );
-      } else {
-        let content = text.slice(from, to);
-        if (args.linewise) {
-          from += /^\s*/u.exec(content)![0].length;
-          to = Math.max(from, to - /\s*$/u.exec(content)![0].length);
-          content = text.slice(from, to);
-        }
-        cursor = cm.posFromIndex(from);
-        cm.replaceRange(surroundText(content, args.replacement ?? ""), cursor, cm.posFromIndex(to));
-      }
+      const edit =
+        operation === "change"
+          ? changeSurroundEdit(text, from, args.selectedCharacter ?? "", args.replacement, 1)
+          : addSurroundEdit(text, from, to, args.replacement ?? "", !!args.linewise);
+      if (!edit) continue;
+      cursor = cm.posFromIndex(edit.cursor);
+      cm.replaceRange(edit.insert, cm.posFromIndex(edit.from), cm.posFromIndex(edit.to));
     }
     return cursor;
   }
@@ -746,13 +728,7 @@ export class NativeExtensions {
   action(name: string, args: NativeArgs): void {
     if (!this.active()) return;
     if (name === "tableLeave" || name === "tableMove") {
-      let owner: unknown;
-      this.host.app.workspace?.iterateAllLeaves?.((leaf) => {
-        const view = leaf.view as unknown as {
-          editMode?: { cm?: unknown; tableCell?: { cm?: unknown } };
-        };
-        if (view.editMode?.tableCell?.cm === this.cm.cm6) owner = view.editMode;
-      });
+      const owner = resolveEditorLeaf(this.host.app, this.cm.cm6)?.editMode;
       const table = resolveNativeTable(owner, this.cm.cm6);
       if (!table.supported) return;
       const generation = ++this.foldGeneration;
@@ -764,20 +740,15 @@ export class NativeExtensions {
           else {
             const current = context.currentCell;
             if (!current) return;
-            const model = context.snapshot();
-            const columns = model.rows[0]?.length ?? 0;
-            if (!columns || model.rows.length === 0) return;
-            const currentIndex = current.row * columns + current.column;
-            const index = Math.max(
-              0,
-              Math.min(
-                model.rows.length * columns - 1,
-                currentIndex + (args.forward ? 1 : -1) * Math.max(1, args.repeat),
-              ),
+            const next = adjacentCellPosition(
+              context.snapshot(),
+              current,
+              !!args.forward,
+              args.repeat,
             );
-            if (index === currentIndex) return;
+            if (!next || (next.row === current.row && next.column === current.column)) return;
             if (this.cm.state.vim?.visualMode) this.vim.exitVisualMode(this.cm, false);
-            context.focus({ row: Math.floor(index / columns), column: index % columns, offset: 0 });
+            context.focus(next);
           }
         })
         .catch((error) => {

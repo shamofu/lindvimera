@@ -1,41 +1,27 @@
 import { Scope, type KeymapEventHandler } from "obsidian";
-import type { EditorView } from "@codemirror/view";
 import type { BackendHost } from "../types";
-import { getNativeCM, getNativeVim } from "./native";
+import { getNativeCM, getNativeVim, iterateEditorLeaves, type NativeDocumentView } from "./native";
 
-interface DocumentView {
-  scope: Scope | null;
-  editMode?: {
-    cm?: EditorView;
-    tableCell?: { cm: EditorView } | null;
-    editorSuggest?: { isShowingSuggestion(): boolean };
-  };
-}
 interface Guard {
-  document: DocumentView;
+  document: NativeDocumentView;
   scope: Scope;
-  parent: Scope | null;
+  parent: Scope | null | undefined;
   handler: KeymapEventHandler;
 }
 
 /** Obsidian's application shortcuts run before CM6. Reserve only the logical
  * jump keys while a native Normal-mode editor owns focus. */
 export class NativeNavigationScope {
-  private guards = new Map<DocumentView, Guard>();
+  private guards = new Map<NativeDocumentView, Guard>();
   private disposed = false;
 
   constructor(private readonly host: BackendHost) {}
 
   refresh(): void {
     if (this.disposed) return;
-    const current = new Set<DocumentView>();
-    const workspace = this.host.app.workspace as unknown as {
-      iterateAllLeaves?(visit: (leaf: { view?: DocumentView }) => void): void;
-    };
+    const current = new Set<NativeDocumentView>();
     if (this.host.isActive())
-      workspace?.iterateAllLeaves?.((leaf) => {
-        const document = leaf.view;
-        if (!document?.editMode?.cm) return;
+      iterateEditorLeaves(this.host.app, (document) => {
         current.add(document);
         const old = this.guards.get(document);
         if (old?.scope === document.scope) return;

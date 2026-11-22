@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { indexMarkdown, markdownObject, structureMotion } from "../../src/markdown/ranges";
-import { changeSurround, findSurround, surroundText } from "../../src/markdown/surround";
+import {
+  addSurroundEdit,
+  changeSurround,
+  changeSurroundEdit,
+  findSurround,
+  surroundText,
+} from "../../src/markdown/surround";
+import { lastCharacter } from "../../src/word";
 
 describe("Markdown syntax ranges", () => {
   it("skips frontmatter and fenced/indented code for structural navigation", () => {
@@ -77,5 +84,76 @@ describe("Surround text transformations used by body and tables", () => {
     expect(surroundText("word", "b")).toBe("(word)");
     expect(surroundText("word", "~")).toBe("~word~");
     expect(surroundText("word", "<Esc>")).toBe("word");
+  });
+  it("computes range-based add and change surround edits including linewise trimming", () => {
+    expect(addSurroundEdit("word next", 0, 4, ")")).toEqual({
+      from: 0,
+      to: 4,
+      insert: "(word)",
+      cursor: 0,
+    });
+    expect(addSurroundEdit("  word next\n", 0, 12, '"', true)).toEqual({
+      from: 2,
+      to: 11,
+      insert: '"word next"',
+      cursor: 2,
+    });
+    expect(addSurroundEdit("   \n", 0, 4, ")", true)).toEqual({
+      from: 4,
+      to: 4,
+      insert: "()",
+      cursor: 4,
+    });
+    expect(addSurroundEdit("word", 0, 4, "")).toBeUndefined();
+
+    expect(changeSurroundEdit("**word**", 3, "*", ")")).toEqual({
+      from: 0,
+      to: 8,
+      insert: "(word)",
+      cursor: 0,
+    });
+    expect(changeSurroundEdit("**word**", 3, "*")).toEqual({
+      from: 0,
+      to: 8,
+      insert: "word",
+      cursor: 0,
+    });
+    expect(changeSurroundEdit("**word**", 3, "*", "", 1)).toEqual({
+      from: 0,
+      to: 8,
+      insert: "word",
+      cursor: 0,
+    });
+    const precomputed = findSurround("((one))", 3, ")", 2)!;
+    expect(changeSurroundEdit("((one))", 3, ")", "]", 1, precomputed)).toEqual({
+      from: 0,
+      to: 7,
+      insert: "[(one)]",
+      cursor: 0,
+    });
+    expect(changeSurroundEdit("plain", 1, "*")).toBeUndefined();
+  });
+});
+
+describe("lastCharacter grapheme-end helper", () => {
+  it("resolves grapheme start indices across ASCII, Japanese, surrogate pairs, combining marks, and slice bounds", () => {
+    expect(lastCharacter("abc")).toBe(2);
+    expect(lastCharacter("abc", 1, 2)).toBe(1);
+    expect(lastCharacter("abc", 2, 2)).toBe(2);
+    expect(lastCharacter("")).toBe(0);
+    expect(lastCharacter("日本語")).toBe(2);
+    expect(lastCharacter("日本語", 0, 2)).toBe(1);
+    // Surrogate pair + ZWJ emoji sequence
+    const rocket = "a🚀";
+    expect(lastCharacter(rocket)).toBe(1);
+    const family = "a👨‍👩‍👧‍👦";
+    expect(lastCharacter(family)).toBe(1);
+    const skinTone = "x👍🏽";
+    expect(lastCharacter(skinTone)).toBe(1);
+    // Combining mark (dakuten)
+    const dakuten = "abか\u3099";
+    expect(lastCharacter(dakuten)).toBe(2);
+    expect(lastCharacter(dakuten, 1, dakuten.length)).toBe(2);
+    expect(lastCharacter("e\u0301x", 0, 2)).toBe(0);
   });
 });
