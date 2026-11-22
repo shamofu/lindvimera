@@ -1,5 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { EditorState, RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import {
+  EditorState,
+  RangeSetBuilder,
+  StateEffect,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, WidgetType } from "@codemirror/view";
 import { createBackend } from "../src/engines/builtin";
 import { analyseKeyBindings } from "../src/engines/builtin/policy";
@@ -13,6 +19,7 @@ import {
   type NativeWindow,
 } from "../src/engines/builtin/native";
 import { DEFAULT_SETTINGS, type LindvimeraSettings } from "../src/settings";
+import { parseMarkdownTable } from "../src/table/source";
 import { budouxSegmenter } from "../src/word";
 import type { BackendHost } from "../src/engines/types";
 
@@ -23,6 +30,17 @@ function fakeNative() {
   const motions = new Map();
   const actions = new Map();
   const operators = new Map();
+  const macroModeState: {
+    isRecording?: boolean;
+    latestRegister?: string;
+    isPlaying?: boolean;
+    replaySearchQueries: unknown[];
+  } = {
+    isRecording: false,
+    latestRegister: undefined,
+    isPlaying: false,
+    replaySearchQueries: [],
+  };
   const findKey = vi.fn<NativeVim["findKey"]>(() => vi.fn(() => true));
   const vim = {
     findKey,
@@ -42,13 +60,20 @@ function fakeNative() {
     getRegisterController: () => ({
       getRegister: () => ({ keyBuffer: [], insertModeChanges: [], searchQueries: [] }),
     }),
-    getVimGlobalState_: () => ({ macroModeState: { replaySearchQueries: [] } }),
+    getVimGlobalState_: () => ({ macroModeState }),
   } satisfies NativeVim;
-  return { vim, commands, motions, actions, operators, findKey };
+  return { vim, commands, motions, actions, operators, findKey, macroModeState };
+}
+
+const cmEmitters = new WeakMap<NativeCM, (event: string, ...args: unknown[]) => void>();
+
+function emitCM(cm: NativeCM, event: string, ...args: unknown[]): void {
+  cmEmitters.get(cm)?.(event, ...args);
 }
 
 function nativeCM(view: EditorView): NativeCM {
   let cursor = { line: 0, ch: 0 };
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const cm: NativeCM = {
     cm6: view,
     state: {
@@ -77,9 +102,21 @@ function nativeCM(view: EditorView): NativeCM {
       });
     },
     operation: (action) => action(),
-    on: vi.fn(),
-    off: vi.fn(),
+    on: vi.fn((event, callback) => {
+      let set = listeners.get(event);
+      if (!set) {
+        set = new Set();
+        listeners.set(event, set);
+      }
+      set.add(callback);
+    }),
+    off: vi.fn((event, callback) => {
+      listeners.get(event)?.delete(callback);
+    }),
   };
+  cmEmitters.set(cm, (event, ...args) => {
+    for (const callback of listeners.get(event) ?? []) callback(...args);
+  });
   (view as EditorView & { cm: NativeCM }).cm = cm;
   return cm;
 }
@@ -131,11 +168,16 @@ async function setup() {
     ...native,
     cm,
     view,
+    extension,
     host,
     backend,
     settings,
     suspend: () => {
       active = false;
+      backend.refresh();
+    },
+    activate: () => {
+      active = true;
       backend.refresh();
     },
   };
@@ -555,5 +597,483 @@ describe("builtin ownership boundary", () => {
     // dispose() restores original cm.setCursor
     backend.dispose();
     expect(cm.setCursor).toBe(rawSetCursor);
+  });
+
+  it("synchronizes lindvimera-custom-cursor across settings, suspension, multi-view, and cleanup", async () => {
+    const test = await setup();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+
+    test.settings.cursorColor = "#123abc";
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+
+    const cellView = new EditorView({
+      state: EditorState.create({ doc: "cell", extensions: test.extension }),
+      parent: document.body,
+    });
+    cleanup.push(() => cellView.destroy());
+    nativeCM(cellView);
+    await Promise.resolve();
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(cellView.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+
+    test.suspend();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(cellView.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+
+    test.activate();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(cellView.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("#123abc");
+
+    test.settings.cursorColor = null;
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(cellView.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+
+    test.settings.cursorColor = "#abcdef";
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+
+    cellView.destroy();
+    expect(cellView.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(cellView.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+
+    test.backend.dispose();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.style.getPropertyValue("--lindvimera-cursor-color")).toBe("");
+  });
+
+  it("retains lindvimera-custom-cursor across focus/blur and editorAttributes updates, and omits it when inactive, null, or disposed", async () => {
+    const test = await setup();
+    test.settings.cursorColor = "#123abc";
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+
+    // Focus then blur with CM6 dispatch to trigger updateAttrs().
+    test.view.focus();
+    test.view.dispatch({});
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+
+    test.view.contentDOM.blur();
+    test.view.dispatch({});
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+
+    // Appending external EditorView.editorAttributes (e.g. theme classes) preserves custom cursor.
+    test.view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.editorAttributes.of({ class: "theme-cursor" }),
+      ),
+    });
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    expect(test.view.dom.classList.contains("theme-cursor")).toBe(true);
+
+    // Suspended: attribute refreshes must not re-add the class.
+    test.suspend();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    test.view.focus();
+    test.view.dispatch({
+      effects: StateEffect.appendConfig.of(EditorView.editorAttributes.of({ class: "extra-cls" })),
+    });
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.classList.contains("extra-cls")).toBe(true);
+
+    // Reactivate then clear cursorColor: attribute refreshes keep it absent.
+    test.activate();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    test.settings.cursorColor = null;
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    test.view.contentDOM.blur();
+    test.view.dispatch({});
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+
+    // Disposed: attribute refreshes never re-add the class.
+    test.settings.cursorColor = "#abcdef";
+    test.backend.applySettings();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(true);
+    test.backend.dispose();
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    test.view.focus();
+    test.view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.editorAttributes.of({ class: "after-dispose" }),
+      ),
+    });
+    expect(test.view.dom.classList.contains("lindvimera-custom-cursor")).toBe(false);
+    expect(test.view.dom.classList.contains("after-dispose")).toBe(true);
+  });
+
+  it("reports REPLACE, visual modes, pending keys, vim-command-done clearing, and macro recording", async () => {
+    const test = await setup();
+    const reportMode = vi.mocked(test.host.reportMode);
+    test.view.focus();
+    const vimState = test.cm.state.vim!;
+
+    test.backend.applySettings();
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+
+    vimState.insertMode = true;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("INSERT");
+
+    test.cm.state.overwrite = true;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("REPLACE");
+    test.backend.applySettings();
+    expect(reportMode).toHaveBeenLastCalledWith("REPLACE");
+
+    // Stale overwrite flag while not in insertMode must report NORMAL, not REPLACE.
+    vimState.insertMode = false;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+    test.cm.state.overwrite = false;
+
+    vimState.visualMode = true;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("VISUAL");
+
+    vimState.visualLine = true;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("VISUAL LINE");
+
+    vimState.visualLine = false;
+    vimState.visualBlock = true;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("VISUAL BLOCK");
+
+    vimState.visualMode = false;
+    vimState.visualBlock = false;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+
+    // Pending keys via inputState and command wrapper.
+    vimState.inputState = { keyBuffer: ["2"], getRepeat: () => 2 };
+    test.vim.handleKey(test.cm, "2");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · 2");
+
+    vimState.inputState = {
+      keyBuffer: [],
+      prefixRepeat: ["2"],
+      operator: "delete",
+      getRepeat: () => 2,
+    };
+    test.vim.handleKey(test.cm, "d");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · 2d");
+
+    vimState.inputState = {
+      keyBuffer: [],
+      registerName: "a",
+      getRepeat: () => 1,
+    };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith('NORMAL · "a');
+
+    vimState.inputState = {
+      keyBuffer: [],
+      operator: "indent",
+      operatorArgs: { repeat: 1, indentRight: true },
+      getRepeat: () => 1,
+    };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · >");
+
+    vimState.inputState = {
+      keyBuffer: [],
+      operator: "changeCase",
+      operatorShortcut: "gu",
+      getRepeat: () => 1,
+    };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · gu");
+
+    vimState.inputState = {
+      keyBuffer: [],
+      operator: "lindvimera115_surroundAdd",
+      getRepeat: () => 1,
+    };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · ys");
+
+    vimState.inputState = { keyBuffer: [], getRepeat: () => 1 };
+    vimState.expectLiteralNext = true;
+    vimState.status = "ysiw";
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · ysiw");
+
+    vimState.status = undefined;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+    vimState.expectLiteralNext = false;
+
+    // Pending keys clear via vim-command-done even when findKey returns undefined.
+    vimState.inputState = { keyBuffer: ["d"], getRepeat: () => 1 };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · d");
+
+    test.findKey.mockImplementationOnce(() => {
+      vimState.inputState = { keyBuffer: [], getRepeat: () => 1 };
+      emitCM(test.cm, "vim-command-done");
+      return undefined;
+    });
+    test.vim.handleKey(test.cm, "<C-z>");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+
+    // Macro recording status alone, combined with pending keys, missing register, and stopped.
+    test.macroModeState.isRecording = true;
+    test.macroModeState.latestRegister = "a";
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · recording @a");
+
+    vimState.inputState = { keyBuffer: [], operator: "delete", getRepeat: () => 1 };
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL · d · recording @a");
+
+    vimState.inputState = { keyBuffer: [], getRepeat: () => 1 };
+    test.macroModeState.isRecording = false;
+    emitCM(test.cm, "vim-command-done");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+
+    test.macroModeState.isRecording = true;
+    test.macroModeState.latestRegister = undefined;
+    emitCM(test.cm, "vim-mode-change");
+    expect(reportMode).toHaveBeenLastCalledWith("NORMAL");
+
+    test.backend.dispose();
+    expect(test.cm.off).toHaveBeenCalledWith("vim-command-done", expect.any(Function));
+  });
+
+  it("restricts [t/]t to Normal mode and exits Visual mode before focusing adjacent cell on Tab/S-Tab", async () => {
+    const native = fakeNative();
+    (window as NativeWindow).CodeMirrorAdapter = { Vim: native.vim };
+    let extension: Extension = [];
+    const docText = "before\n\n| a | b |\n| --- | --- |\n| c | d |\n\nafter";
+    const tableStart = docText.indexOf("| a |");
+    const tableEnd = docText.indexOf("| d |") + "| d |".length;
+    const events: string[] = [];
+
+    interface MockCell {
+      row: number;
+      col: number;
+      text: string;
+      table: MockTable;
+      getAbsoluteOffsets(): { start: number; end: number; textStart: number; textEnd: number };
+    }
+    interface MockTable {
+      start: number;
+      end: number;
+      rows: MockCell[][];
+      editor: MockEditMode;
+      getCellAt(row: number, column: number): MockCell | null;
+      deselectCells: ReturnType<typeof vi.fn>;
+    }
+    interface MockEditMode {
+      cm: EditorView;
+      tableCell: { cell: MockCell; table: MockTable; cm: EditorView } | null;
+      editTableCell: (
+        table: MockTable,
+        cell: MockCell,
+      ) => { cell: MockCell; table: MockTable; cm: EditorView };
+      destroyTableCell: ReturnType<typeof vi.fn>;
+    }
+
+    let editMode!: MockEditMode;
+    const host: BackendHost = {
+      app: {
+        workspace: {
+          iterateAllLeaves: (callback: (leaf: { view: { editMode: MockEditMode } }) => void) =>
+            callback({ view: { editMode } }),
+        },
+      } as unknown as BackendHost["app"],
+      settings: () => ({ ...DEFAULT_SETTINGS, keyBindings: [], escapeSequences: [] }),
+      wordSegmenter: () => budouxSegmenter,
+      isActive: () => true,
+      reportMode: vi.fn(),
+      reportError: vi.fn(),
+      registerEditorExtension: (value) => {
+        extension = value;
+      },
+    };
+    const backend = createBackend(host);
+    cleanup.push(() => backend.dispose());
+
+    const parentView = new EditorView({
+      state: EditorState.create({ doc: docText, extensions: extension }),
+      parent: document.body,
+    });
+    cleanup.push(() => parentView.destroy());
+    nativeCM(parentView);
+
+    const parsed = parseMarkdownTable(docText.slice(tableStart, tableEnd), tableStart);
+    const table: MockTable = {
+      start: tableStart,
+      end: tableEnd,
+      rows: [],
+      editor: null as unknown as MockEditMode,
+      getCellAt: (row, column) => table.rows[row]?.[column] ?? null,
+      deselectCells: vi.fn(),
+    };
+    table.rows = parsed.rows.map((row) =>
+      row.map((cell) => ({
+        row: cell.row,
+        col: cell.column,
+        text: cell.map.source,
+        table,
+        getAbsoluteOffsets: () => ({
+          start: cell.from,
+          end: cell.to,
+          textStart: cell.content.from,
+          textEnd: cell.content.to,
+        }),
+      })),
+    );
+
+    const widget = document.createElement("div");
+    widget.className = "cm-table-widget";
+    parentView.dom.appendChild(widget);
+
+    let cellView!: EditorView;
+    let cellCM!: NativeCM;
+    const openCell = (cell: MockCell) => {
+      if (cellView) cellView.destroy();
+      cellView = new EditorView({
+        state: EditorState.create({ doc: cell.text.trim(), extensions: extension }),
+        parent: widget,
+      });
+      cellCM = nativeCM(cellView);
+      const entry = { cell, table, cm: cellView };
+      editMode.tableCell = entry;
+      return entry;
+    };
+
+    editMode = {
+      cm: parentView,
+      tableCell: null,
+      editTableCell: vi.fn((_table: MockTable, cell: MockCell) => {
+        events.push("editTableCell");
+        return openCell(cell);
+      }),
+      destroyTableCell: vi.fn(() => {
+        if (cellView) cellView.destroy();
+        editMode.tableCell = null;
+      }),
+    };
+    table.editor = editMode;
+    openCell(table.rows[0][0]);
+    cleanup.push(() => cellView?.destroy());
+    await Promise.resolve();
+
+    let captured: NativeCommand[] = [];
+    native.findKey.mockImplementation(() => {
+      captured = [...native.commands];
+      return () => true;
+    });
+    native.vim.handleKey(cellCM, "<Tab>");
+
+    expect(captured.filter((c) => c.keys === "[t").map((c) => c.context)).toEqual(["normal"]);
+    expect(captured.filter((c) => c.keys === "]t").map((c) => c.context)).toEqual(["normal"]);
+    expect(
+      captured
+        .filter((c) => c.keys === "<Tab>")
+        .map((c) => c.context)
+        .sort(),
+    ).toEqual(["normal", "visual"]);
+    expect(
+      captured
+        .filter((c) => c.keys === "<S-Tab>")
+        .map((c) => c.context)
+        .sort(),
+    ).toEqual(["normal", "visual"]);
+
+    native.vim.exitVisualMode.mockImplementation(() => {
+      events.push("exitVisualMode");
+    });
+
+    const tableMove = native.actions.get("lindvimera115_tableMove")!;
+    const firstCM = cellCM;
+    firstCM.state.vim!.visualMode = true;
+    tableMove(firstCM, { forward: true, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+
+    expect(native.vim.exitVisualMode).toHaveBeenCalledWith(firstCM, false);
+    expect(events).toEqual(["exitVisualMode", "editTableCell"]);
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 0, col: 1 });
+
+    await Promise.resolve();
+    events.length = 0;
+    native.vim.exitVisualMode.mockClear();
+    const secondCM = cellCM;
+    secondCM.state.vim!.visualMode = true;
+    tableMove(secondCM, { forward: false, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+
+    expect(native.vim.exitVisualMode).toHaveBeenCalledWith(secondCM, false);
+    expect(events).toEqual(["exitVisualMode", "editTableCell"]);
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 0, col: 0 });
+
+    await Promise.resolve();
+    const tableLeave = native.actions.get("lindvimera115_tableLeave")!;
+    tableLeave(cellCM, { forward: false, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(table.deselectCells).toHaveBeenCalled();
+    expect(editMode.destroyTableCell).toHaveBeenCalled();
+    expect(parentView.state.selection.main.head).toBe("before\n".length);
+
+    openCell(table.rows[0][0]);
+    await Promise.resolve();
+    tableLeave(cellCM, { forward: true, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(parentView.state.selection.main.head).toBe(tableEnd + 1);
+
+    // Boundary moves (<S-Tab> at (0, 0) and <Tab> at last cell (1, 1)) must be no-ops in
+    // both Visual and Normal modes: zero calls to exitVisualMode or editTableCell.
+    const editTableCellSpy = vi.mocked(editMode.editTableCell);
+
+    openCell(table.rows[0][0]);
+    await Promise.resolve();
+    editTableCellSpy.mockClear();
+    native.vim.exitVisualMode.mockClear();
+    cellCM.state.vim!.visualMode = true;
+    tableMove(cellCM, { forward: false, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(native.vim.exitVisualMode).not.toHaveBeenCalled();
+    expect(editTableCellSpy).not.toHaveBeenCalled();
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 0, col: 0 });
+
+    cellCM.state.vim!.visualMode = false;
+    tableMove(cellCM, { forward: false, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(native.vim.exitVisualMode).not.toHaveBeenCalled();
+    expect(editTableCellSpy).not.toHaveBeenCalled();
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 0, col: 0 });
+
+    openCell(table.rows[1][1]);
+    await Promise.resolve();
+    editTableCellSpy.mockClear();
+    native.vim.exitVisualMode.mockClear();
+    cellCM.state.vim!.visualMode = true;
+    tableMove(cellCM, { forward: true, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    tableMove(cellCM, { forward: true, repeat: 5 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(native.vim.exitVisualMode).not.toHaveBeenCalled();
+    expect(editTableCellSpy).not.toHaveBeenCalled();
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 1, col: 1 });
+
+    cellCM.state.vim!.visualMode = false;
+    tableMove(cellCM, { forward: true, repeat: 1 });
+    await (backend.runtime as { settled(): Promise<void> }).settled();
+    expect(native.vim.exitVisualMode).not.toHaveBeenCalled();
+    expect(editTableCellSpy).not.toHaveBeenCalled();
+    expect(editMode.tableCell?.cell).toMatchObject({ row: 1, col: 1 });
   });
 });

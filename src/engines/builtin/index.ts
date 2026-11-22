@@ -16,12 +16,15 @@ import {
   withMappings,
   type NativeCM,
   type NativeCommand,
+  type NativeInput,
+  type NativeState,
   type NativeVim,
 } from "./native";
 
 interface Session {
   readonly cm: NativeCM;
   readonly view: EditorView;
+  readonly vim: NativeVim;
   readonly extensions: NativeExtensions;
   readonly hints: NativePendingHints;
   readonly ex: NativeExBridge;
@@ -33,6 +36,54 @@ interface Session {
   mappings: NativeCommand[];
   previousCursorColor: string;
   appliedCursorColor?: string;
+}
+
+function hasPendingInput(state: NativeState | undefined): boolean {
+  const input = state?.inputState;
+  return !!(
+    state?.expectLiteralNext ||
+    input?.operator ||
+    input?.keyBuffer?.length ||
+    input?.prefixRepeat?.length ||
+    input?.motionRepeat?.length ||
+    input?.registerName
+  );
+}
+
+function operatorLabel(input: NativeInput): string {
+  if (input.operatorShortcut) return input.operatorShortcut;
+  switch (input.operator) {
+    case "delete":
+      return "d";
+    case "yank":
+      return "y";
+    case "change":
+      return "c";
+    case "indentAuto":
+      return "=";
+    case "indent":
+      return input.operatorArgs?.indentRight ? ">" : "<";
+    case "lindvimera115_surroundAdd":
+      return "ys";
+    case "lindvimera115_surroundDelete":
+      return "ds";
+    case "lindvimera115_surroundChange":
+      return "cs";
+    default:
+      return input.operator ?? "";
+  }
+}
+
+function pendingKeys(state: NativeState | undefined): string {
+  const input = state?.inputState;
+  if (!input) return "";
+  return [
+    input.registerName ? `"${input.registerName}` : "",
+    input.prefixRepeat?.join("") ?? "",
+    input.operator ? operatorLabel(input) : "",
+    input.motionRepeat?.join("") ?? "",
+    input.keyBuffer?.join("") ?? "",
+  ].join("");
 }
 
 interface LookupLifetime {
@@ -125,20 +176,27 @@ export function createBackend(host: BackendHost): EngineBackend {
   function updateMode(cm: NativeCM): void {
     if (!disposed && host.isActive()) {
       tableReplay.capture(cm, host);
+      const session = sessions.get(cm);
       const state = cm.state.vim;
-      if (cm.cm6.dom.ownerDocument.activeElement?.closest(".cm-editor") === cm.cm6.dom)
-        host.reportMode(
-          state?.insertMode
-            ? "INSERT"
-            : state?.visualMode
-              ? state.visualLine
+      if (cm.cm6.dom.ownerDocument.activeElement?.closest(".cm-editor") === cm.cm6.dom) {
+        const mode = state?.insertMode
+          ? cm.state.overwrite
+            ? "REPLACE"
+            : "INSERT"
+          : state?.visualMode
+            ? state.visualBlock
+              ? "VISUAL BLOCK"
+              : state.visualLine
                 ? "VISUAL LINE"
-                : state.visualBlock
-                  ? "VISUAL BLOCK"
-                  : "VISUAL"
-              : "NORMAL",
-        );
-      sessions.get(cm)?.hints.refresh();
+                : "VISUAL"
+            : "NORMAL";
+        const pending = hasPendingInput(state) ? state?.status || pendingKeys(state) : "";
+        const macro = session?.vim.getVimGlobalState_?.()?.macroModeState;
+        const recording =
+          macro?.isRecording && macro.latestRegister ? `recording @${macro.latestRegister}` : "";
+        host.reportMode([mode, pending, recording].filter(Boolean).join(" · "));
+      }
+      session?.hints.refresh();
     }
   }
 
@@ -180,6 +238,10 @@ export function createBackend(host: BackendHost): EngineBackend {
         ),
       ];
     }
+    session.view.dom.classList.toggle(
+      "lindvimera-custom-cursor",
+      Boolean(settings.cursorColor && host.isActive()),
+    );
     const style = session.view.dom.style;
     if (settings.cursorColor && host.isActive()) {
       session.appliedCursorColor = settings.cursorColor;
@@ -193,6 +255,7 @@ export function createBackend(host: BackendHost): EngineBackend {
       else style.removeProperty("--lindvimera-cursor-color");
       session.appliedCursorColor = undefined;
     }
+    updateMode(session.cm);
   }
 
   function detach(cm: NativeCM): void {
@@ -208,6 +271,8 @@ export function createBackend(host: BackendHost): EngineBackend {
     if (session.ownsQueue) session.queue.dispose();
     navigation.detach(cm);
     cm.off("vim-mode-change", session.modeChanged);
+    cm.off("vim-command-done", session.modeChanged);
+    session.view.dom.classList.remove("lindvimera-custom-cursor");
     const style = session.view.dom.style;
     if (
       session.appliedCursorColor &&
@@ -275,6 +340,7 @@ export function createBackend(host: BackendHost): EngineBackend {
     const session: Session = {
       cm,
       view,
+      vim,
       extensions,
       ex,
       queue,
@@ -289,8 +355,8 @@ export function createBackend(host: BackendHost): EngineBackend {
     sessions.set(cm, session);
     tableReplay.restore(cm, host);
     cm.on("vim-mode-change", modeChanged);
+    cm.on("vim-command-done", modeChanged);
     configure(session);
-    updateMode(cm);
     scope.refresh();
   }
 
@@ -309,6 +375,11 @@ export function createBackend(host: BackendHost): EngineBackend {
   }
 
   host.registerEditorExtension([
+    EditorView.editorAttributes.of(() =>
+      !disposed && host.isActive() && host.settings().cursorColor
+        ? { class: "lindvimera-custom-cursor" }
+        : null,
+    ),
     createLivePreviewClickExtension({
       isActive: () => !disposed && host.isActive(),
       isLivePreview: isLivePreviewView,

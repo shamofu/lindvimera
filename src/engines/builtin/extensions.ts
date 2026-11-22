@@ -350,13 +350,14 @@ export class NativeExtensions {
         isEdit: true,
         interlaceInsertRepeat: true,
       });
-    if (!body && settings.tables)
+    if (!body && settings.tables) {
+      action("[t", "tableLeave", { forward: false });
+      action("]t", "tableLeave", { forward: true });
       for (const context of ["normal", "visual"]) {
-        action("[t", "tableLeave", { forward: false }, context);
-        action("]t", "tableLeave", { forward: true }, context);
         action("<Tab>", "tableMove", { forward: true }, context);
         action("<S-Tab>", "tableMove", { forward: false }, context);
       }
+    }
     if (livePreview && this.cm.findPosV) {
       for (const forward of [false, true])
         for (const context of ["normal", "visual"])
@@ -746,7 +747,7 @@ export class NativeExtensions {
     if (!this.active()) return;
     if (name === "tableLeave" || name === "tableMove") {
       let owner: unknown;
-      this.host.app.workspace.iterateAllLeaves((leaf) => {
+      this.host.app.workspace?.iterateAllLeaves?.((leaf) => {
         const view = leaf.view as unknown as {
           editMode?: { cm?: unknown; tableCell?: { cm?: unknown } };
         };
@@ -764,16 +765,18 @@ export class NativeExtensions {
             const current = context.currentCell;
             if (!current) return;
             const model = context.snapshot();
-            const columns = model.rows[0].length;
+            const columns = model.rows[0]?.length ?? 0;
+            if (!columns || model.rows.length === 0) return;
+            const currentIndex = current.row * columns + current.column;
             const index = Math.max(
               0,
               Math.min(
                 model.rows.length * columns - 1,
-                current.row * columns +
-                  current.column +
-                  (args.forward ? 1 : -1) * Math.max(1, args.repeat),
+                currentIndex + (args.forward ? 1 : -1) * Math.max(1, args.repeat),
               ),
             );
+            if (index === currentIndex) return;
+            if (this.cm.state.vim?.visualMode) this.vim.exitVisualMode(this.cm, false);
             context.focus({ row: Math.floor(index / columns), column: index % columns, offset: 0 });
           }
         })

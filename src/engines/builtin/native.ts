@@ -25,6 +25,9 @@ export interface NativeInput {
   operatorArgs?: NativeArgs;
   motion?: string;
   keyBuffer: string[];
+  prefixRepeat?: string[];
+  motionRepeat?: string[];
+  registerName?: string;
   getRepeat(): number;
   [key: string]: unknown;
 }
@@ -36,6 +39,7 @@ export interface NativeState {
   visualBlock?: boolean;
   expectLiteralNext?: boolean;
   mode?: string;
+  status?: string;
   lastHPos?: number;
   lastHSPos?: number;
   inputState: NativeInput;
@@ -47,7 +51,7 @@ export interface NativeState {
 export interface NativeCM extends WordDocument {
   cm6: EditorView;
   curOp?: unknown;
-  state: { vim?: NativeState };
+  state: { vim?: NativeState; overwrite?: boolean };
   getValue(): string;
   getCursor(which?: string): Position;
   setCursor: (position: Position | number, ch?: number) => void;
@@ -108,6 +112,15 @@ export interface NativeVim {
   exitInsertMode?: (cm: NativeCM, keepCursor?: boolean) => void;
   getOption?(name: string): unknown;
   setOption?(name: string, value: unknown): void;
+  getVimGlobalState_?: () =>
+    | {
+        macroModeState?: {
+          isRecording?: boolean;
+          latestRegister?: string;
+          isPlaying?: boolean;
+        };
+      }
+    | undefined;
   [key: string]: unknown;
 }
 export interface NativeWindow extends Window {
