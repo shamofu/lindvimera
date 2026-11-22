@@ -32,7 +32,6 @@ for (const survivor of selected ? [selected] : ["embedded", "builtin"]) {
     [
       "scripts",
       "--test",
-      "test/audit-dependencies.test.mjs",
       "test/probe/*.test.mjs",
       "test/engines/*.test.mjs",
       "test/release/*.test.mjs",

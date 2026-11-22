@@ -85,10 +85,6 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.source.outputs.version }}
         run: ./scripts/release/package.ps1
-      - name: Generate release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/release/notes.mjs --output .release-gate/notes.md
       - name: Attest the tested release assets
         uses: actions/attest@v4.2.2
         with:
@@ -98,8 +94,21 @@ jobs:
             .release/styles.css
             .release/lindvimera-${{ steps.source.outputs.version }}.zip
             .release/SHA256SUMS
-            .release/provenance.json
-      - name: Publish verified assets without overwriting releases
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./scripts/release/publish.ps1
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tag = $env:RELEASE_VERSION
+          gh release create $tag `
+            .release/main.js `
+            .release/manifest.json `
+            .release/styles.css `
+            ".release/lindvimera-$tag.zip" `
+            .release/SHA256SUMS `
+            --repo $env:GITHUB_REPOSITORY `
+            --title $tag `
+            --verify-tag `
+            --generate-notes

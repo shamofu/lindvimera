@@ -136,7 +136,7 @@ prepare・build・typecheck・testは同じ生成先を置き換えるため、�
 
 ## 依存関係の確認
 
-`pnpm audit:dependencies`は`pnpm audit --json`で開発用を含むnpm依存の全重大度を報告します。High・Criticalがある場合、通信に失敗した場合、応答を解釈できない場合は失敗し、Moderate以下だけなら成功します。自動修復や一律の除外は行いません。依存の更新時と公開前に実行し、検出内容と更新の影響を確認してください。
+`pnpm audit:dependencies`は`pnpm audit --audit-level=high`で開発用を含むnpm依存を検査し、High・Criticalがある場合は失敗します。自動修復や一律の除外は行いません。依存の更新時と公開前に実行し、検出内容と更新の影響を確認してください。
 
 npmの検査だけでは、GitサブモジュールのVim、独自patch、WASM内部の依存を網羅できません。更新時と公開前には[上流Vim](https://github.com/replit/codemirror-vim/security)と[Lindera](https://github.com/lindera/lindera/security)のセキュリティ情報・リリース変更を確認し、次の固定情報と照合します。
 
@@ -168,9 +168,7 @@ Source・Live Preview・セルの入力競合、取消、ホストへの委譲�
 
 mainへのpushで`quality`、`unit`、`build`を独立したWindows 2025 runnerで実行します。`quality`は共通actionで静的解析、整形確認、型検査、公式Lint、依存関係検査と検証スクリプトのテストを実行します。`e2e`はbuildのcandidate artifactをそのまま使用し、`release-ready`は全ジョブの成功後に配布内容の検証と梱包を確認します。失敗・キャンセル・スキップでは成功にしません。main CIではリリース用artifactの保存やAttestation生成を行いません。
 
-タグのReleaseはWindows 2025の単一ジョブ、タイムアウト90分で実行します。タグのcommitと固定サブモジュールを取得し、Node.js 24（24.15.0以上）、pnpm 12.10.1、lockfileで依存を導入します。main CIと共通のquality全検査、単体テスト、ビルド、E2E、配布検証・梱包、変更履歴生成、Attestation生成・検証、公開を順番に実行します。E2E後に本番ビルドを作り直しません。過去のCI成功履歴や保存済みartifactを取得せず、そのRelease実行で検証した成果物を公開します。
-
-公開処理は`scripts/release/publish.ps1`です。`quality`では`node --test test/release/*.test.mjs`と`pwsh -NoProfile -File test/release/publish.test.ps1`も実行し、配布検証・梱包、Git履歴からの変更点生成、本文だけの更新、下書きの再作成・公開条件を検査します。GitHubへの書き込みはモック化され、テストは実際のReleaseやタグを変更しません。
+タグのReleaseはWindows 2025の単一ジョブ、タイムアウト90分で実行します。タグのcommitと固定サブモジュールを取得し、Node.js 24（24.15.0以上）、pnpm 12.10.1、lockfileで依存を導入します。main CIと共通のquality全検査、単体テスト、ビルド、E2E、配布検証（`scripts/release/validate.mjs`）・梱包（`scripts/release/package.ps1`）、Attestation生成、GitHub Release公開（`gh release create --verify-tag --generate-notes`）を順番に実行します。E2E後に本番ビルドを作り直しません。過去のCI成功履歴や保存済みartifactを取得せず、そのRelease実行で検証した成果物を公開します。
 
 main CIはブランチ単位のconcurrency group、Releaseはタグ名にかかわらず固定の`lindvimera-release` groupでworkflow全体を直列実行します。両者は独立したgroupです。`cancel-in-progress: false`と`queue: max`により、実行中を中断せず最大100件を待機させます。GitHubの待機上限を超えた実行はキャンセルされます。workflowとその子ジョブに同じgroupを重ねません。
 
@@ -178,7 +176,7 @@ main CIではpnpm storeのcacheをbuildだけが保存し、他ジョブは復�
 
 自動E2Eは共通の`scripts/probe/prepare-obsidian.ps1`でSHA-256固定の公式Obsidian 1.15.0以降を準備し、`pnpm test:e2e`で専用profileと新規Vaultを起動します。PlaywrightのCDP接続から既存suiteを実行し、OS入力はWindows `SendInput`で確認します。対話desktopや対象ウィンドウのフォーカスを取得できない場合は失敗します。本番プラグインには標準3ファイルだけを導入し、rendererのHTTP(S)通信を遮断してLinderaが初期化できることも検査します。実IMEや物理キーボード機器そのものの検証ではありません。配布検証と梱包はmain CIとReleaseで共通のスクリプトを使用します。
 
-Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル・ZIP・`SHA256SUMS`・`provenance.json`の計6ファイルへGitHub Artifact Attestationを付与します。公開と証明生成の書き込み権限はReleaseジョブに付与します。`provenance.json`とローカル検証情報はschema 2で、repository・commit・version・今回のReleaseのrun ID／attemptとファイルhashを記録します。Actions artifact IDは使用しません。証明はGitHub側に保存し、Releaseの添付物は増やしません。
+Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル・ZIP・`SHA256SUMS`の計5ファイルへGitHub Artifact Attestationを付与します。公開と証明生成の書き込み権限はReleaseジョブに付与します。証明はGitHub側に保存します。
 
 開発中の`release-ready`はバージョンが公開済みでも成功できます。実リリースは次の手順で行います。
 
@@ -187,20 +185,6 @@ Releaseのパッケージ作成後、`actions/attest@v4`で標準3ファイル�
 3. `git fetch origin`後、`git merge-base --is-ancestor <CI成功済みSHA> origin/main`で対象SHAがmainの履歴内にあることを確認します。mainがさらに進んでいても、確認済みSHAを指定します。
 4. `git tag -a x.y.z <CI成功済みSHA> -m x.y.z`、`git push origin refs/tags/x.y.z`を実行します。タグには`v`を付けません。releaseブランチへの昇格は不要です。
 
-タグworkflowは対象SHAがremote mainの履歴内にあること、タグとcheckout・各versionが一致することを確認します。mainの先端との一致は要求しません。上記手順でmain CIの成功を確認することは開発時の運用ですが、Releaseの実行条件として過去のCI履歴を参照しません。公開スクリプトは全6ファイルの構成・hash・出所を確認し、Attestationをリポジトリ・Release workflow・対象タグref・commitへ照合します。証明の欠落・不一致・通信失敗では下書き削除・作成・アップロード・公開を開始しません。公開処理の開始時・下書き削除前・アップロード後にタグとmainを再取得し、タグが同じSHAを指すこととmainの履歴内にあることを確認します。タグの削除・移動やmain履歴からの離脱を検知した場合は停止します。添付物のremote hashと下書き状態を照合してから公開します。公式レジストリへの申請やnpm公開は行いません。
-
-過去のタグ・Releaseは保持します。廃止したreleaseブランチを参照する旧タグのworkflowは再実行の対象外です。
-
-main CIのcandidate・E2E診断は90日保持します。ReleaseでもE2E開始後の診断を出力専用artifactとして90日保存しますが、診断保存の失敗を公開条件にしません。公開にActions artifactの受け渡しはなく、保存期限は復旧条件に影響しません。
-
-公開前に失敗した場合はReleaseジョブを再実行します。毎回ソースから再ビルド・全検査し、成功後に同じrepository・タグ・commitのschema 2管理マーカーを持つ下書きだけを削除して作り直します。run ID／attemptやhashが前回と異なっていても、この条件を満たす未公開の下書きは再作成できます。削除直前に下書き状態を再取得し、タグは削除しません。マーカーの欠落・重複・不正形式・旧schema、別commitの場合は変更せず停止します。処理中の下書きを手動編集・公開しないでください。公開済みReleaseは通常の公開処理では変更せず停止し、配布物の差し替えには新しいversionを使用します。
-
-### Release本文と過去分の更新
-
-GitHub Releaseの本文は英語に統一し、`scripts/release/notes.mjs`がGit履歴から自動生成します。「Changes」の下へコミット件名とcommitリンクを古い順で並べ、件名は原文のままMarkdownとしてエスケープするため、英語で記述してください。保守・バージョン更新・merge commitも含みます。比較元は、対象commitの祖先にある、対象より小さい最大versionの公開済み正式Releaseです。比較元から対象タグまでを列挙し、「Full Changelog」の比較リンクを添えます。初回は履歴の先頭から対象タグまでを掲載し、比較リンクは付けません。空差分は「No commit changes since the previous release.」とし、必要なタグや履歴を取得できなければ生成を失敗させます。
-
-Releaseタイトルでversionを示すため、本文に`Lindvimera <version>`や`Verified main CI`などの検証リンクは掲載しません。変更点は専用HTMLコメントで囲み、末尾に出所の管理マーカーを非表示で保持します。検証情報は添付された`provenance.json`から参照できます。
-
-既存Releaseは`scripts/release/backfill-notes.mjs`で本文だけを更新します。まずプレビューし、`--apply`で適用します。既存の変更点領域は置換し、製品名・versionの重複行と旧`Verified main CI`行だけを除去します。その他の文章と旧schemaを含む出所マーカーは保持します。Releaseタイトル、添付ファイル、タグ、公開状態を変更せず、適用前後に添付ファイルのID・hash等を確認します。workflowの変更はその変更を含むタグから有効になり、過去の本文更新には再ビルドやタグ変更を必要としません。
+タグworkflowは対象SHAがremote mainの履歴内にあること、タグとcheckout・各versionが一致することを確認します。mainの先端との一致は要求しません。main CIのcandidate・E2E診断は90日保持します。ReleaseでもE2E開始後の診断を出力専用artifactとして90日保存しますが、診断保存の失敗を公開条件にしません。公開済みReleaseは変更せず、配布物の差し替えには新しいversionを使用します。
 
 GitHubのデフォルトブランチと開発先はmainを維持します。Obsidianの公式ディレクトリはデフォルトブランチのmanifestを参照し、そのversionに対応するタグのReleaseから配布物を取得するため、mainのバージョン更新と対応Releaseの公開を一続きの運用として扱ってください。詳細は[公式の提出手順](https://docs.obsidian.md/Plugins/Releasing/Submit%20your%20plugin)を参照してください。ブランチ・タグの強制更新を禁止するリポジトリルールも設定してください。

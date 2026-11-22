@@ -21,7 +21,6 @@ git submodule update --init --recursive
 pnpm install --frozen-lockfile
 pnpm check
 pnpm audit:dependencies
-pwsh -NoProfile -File test/release/publish.test.ps1
 ```
 
 `pnpm check`はOxlint、整形確認、型検査、Obsidian公式Lint、単体テスト、ビルドを実行します。公式Lintだけを実行するときも、先に`pnpm typecheck`で上流の型宣言を生成してください。入力やObsidianとの連携を変更した場合は、Windows・Obsidian 1.15.0以降で`pnpm test:e2e`も実行します。内蔵エンジンは`node scripts/probe/builtin-ci.mjs`で実際のネイティブVimとadapterを確認します。手動確認には`pnpm probe`を使います。これらは専用Vaultとprofileを使い、生成物や診断結果はコミットしません。

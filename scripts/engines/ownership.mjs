@@ -32,7 +32,6 @@ export const ownership = Object.freeze({
     tests: [
       "test/engines/embedded.test.ts",
       "test/engines/embedded-word.test.ts",
-      "test/engines/prepare-vendor.test.mjs",
       "test/ex",
       "test/runtime",
       "test/folding/session.test.ts",

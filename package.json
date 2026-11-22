@@ -19,7 +19,7 @@
     "dev": "node esbuild.config.mjs --watch",
     "lint": "oxlint --deny-warnings .",
     "lint:obsidian": "eslint src manifest.json package.json --max-warnings=0",
-    "audit:dependencies": "node scripts/audit-dependencies.mjs",
+    "audit:dependencies": "pnpm audit --audit-level=high",
     "lint:fix": "oxlint --fix .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
@@ -30,7 +30,7 @@
     "verify:engines": "node scripts/engines/verify.mjs",
     "test:e2e": "node scripts/probe/ci.mjs",
     "probe": "node scripts/probe/run.mjs",
-    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/engines/*.test.mjs test/release/*.test.mjs && pnpm build"
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm lint:obsidian && pnpm test:unit && node --test test/probe/*.test.mjs test/engines/*.test.mjs test/release/*.test.mjs && pnpm build"
   },
   "dependencies": {
     "@lezer/markdown": "1.8.0",

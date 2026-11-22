@@ -191,7 +191,6 @@ test("builtin removal fixture omits embedded probe and owned files while retaini
     "src/input/escape-preview.ts",
     "scripts/probe/cursor-color-regression.mjs",
     "scripts/probe/guide-regression.mjs",
-    "test/engines/prepare-vendor.test.mjs",
     "test/probe/editing-cases.ts",
     "test/probe/ex-cases.ts",
     "test/probe/folding-cases.ts",

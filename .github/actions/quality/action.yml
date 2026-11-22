@@ -13,9 +13,6 @@ runs:
       run: pnpm lint:obsidian
     - shell: pwsh
       run: pnpm audit:dependencies
-    - name: Test dependency, probe, and release tooling
+    - name: Test probe, engine, and distribution tooling
       shell: pwsh
-      run: node --test test/audit-dependencies.test.mjs test/probe/*.test.mjs test/engines/*.test.mjs test/release/*.test.mjs
-    - name: Test release publication
-      shell: pwsh
-      run: ./test/release/publish.test.ps1
+      run: node --test test/probe/*.test.mjs test/engines/*.test.mjs test/release/*.test.mjs
